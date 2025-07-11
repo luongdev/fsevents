@@ -1,0 +1,52 @@
+# Ignore development files
+.git
+.gitignore
+.env*
+*.md
+README.md
+CHECKLIST.md
+
+# Ignore build artifacts
+fsevents
+*.exe
+dist/
+build/
+
+# Ignore logs and temporary files
+*.log
+logs/
+debug*.log
+app.log
+
+# Ignore test files
+*_test.go
+test_*
+*test*
+
+# Ignore IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore OS specific files
+.DS_Store
+Thumbs.db
+
+# Ignore CI/CD files
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+
+# Ignore Docker files (except Dockerfile)
+docker-compose*.yml
+.dockerignore
+
+# Ignore scripts and deployment files
+scripts/
+deployments/
+
+# Ignore package files
+*.tar.gz
+*.zip 
