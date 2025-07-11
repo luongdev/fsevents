@@ -28,17 +28,43 @@ type ESLConfig struct {
 	MaxReconnectAttempts int           `mapstructure:"max_reconnect_attempts"`
 }
 
-// EventsConfig represents event filtering configuration
-type EventsConfig struct {
-	SubscribeEvents []string      `mapstructure:"subscribe_events"`
-	Filters         []EventFilter `mapstructure:"filters"`
+// FieldMapping defines how to map event headers to output fields
+type FieldMapping struct {
+	From         string `mapstructure:"from" yaml:"from"`                   // Source header name
+	To           string `mapstructure:"to" yaml:"to"`                       // Target field name
+	DefaultValue string `mapstructure:"default_value" yaml:"default_value"` // Default value if header missing
+	Transform    string `mapstructure:"transform" yaml:"transform"`         // Optional transformation (lowercase, uppercase, etc.)
 }
 
-// EventFilter represents a single event filter rule
-type EventFilter struct {
-	Field    string `mapstructure:"field"`
-	Operator string `mapstructure:"operator"`
-	Value    string `mapstructure:"value"`
+// ProcessorConfig defines custom event processor configuration
+type ProcessorConfig struct {
+	Name       string                 `mapstructure:"name" yaml:"name"`
+	Type       string                 `mapstructure:"type" yaml:"type"` // builtin, lua, javascript, etc.
+	Config     map[string]interface{} `mapstructure:"config" yaml:"config"`
+	EventTypes []string               `mapstructure:"event_types" yaml:"event_types"` // Which events to process
+}
+
+// PayloadTemplate defines how to structure the output payload
+type PayloadTemplate struct {
+	Format   string            `mapstructure:"format" yaml:"format"`     // json, xml, form, etc.
+	Template string            `mapstructure:"template" yaml:"template"` // Go template string
+	Headers  map[string]string `mapstructure:"headers" yaml:"headers"`   // Additional headers to set
+}
+
+// EventsConfig defines event subscription and processing configuration
+type EventsConfig struct {
+	SubscribeEvents []string          `mapstructure:"subscribe_events" yaml:"subscribe_events"`
+	Filters         []FilterRule      `mapstructure:"filters" yaml:"filters"`
+	FieldMappings   []FieldMapping    `mapstructure:"field_mappings" yaml:"field_mappings"`
+	Processors      []ProcessorConfig `mapstructure:"processors" yaml:"processors"`
+	PayloadTemplate *PayloadTemplate  `mapstructure:"payload_template" yaml:"payload_template"`
+}
+
+// FilterRule represents a single event filter rule (renamed from EventFilter)
+type FilterRule struct {
+	Field    string `mapstructure:"field" yaml:"field"`
+	Operator string `mapstructure:"operator" yaml:"operator"`
+	Value    string `mapstructure:"value" yaml:"value"`
 }
 
 // HTTPConfig represents HTTP client configuration
@@ -260,6 +286,9 @@ func configToMap(c *Config) map[string]interface{} {
 		"events": map[string]interface{}{
 			"subscribe_events": c.Events.SubscribeEvents,
 			"filters":          c.Events.Filters,
+			"field_mappings":   c.Events.FieldMappings,
+			"processors":       c.Events.Processors,
+			"payload_template": c.Events.PayloadTemplate,
 		},
 		"http": map[string]interface{}{
 			"destinations": c.HTTP.Destinations,

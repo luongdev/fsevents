@@ -177,8 +177,8 @@ func (e *EventsConfig) Validate() error {
 	return nil
 }
 
-// Validate validates EventFilter configuration
-func (f *EventFilter) Validate() error {
+// Validate validates FilterRule configuration
+func (f *FilterRule) Validate() error {
 	if f.Field == "" {
 		return fmt.Errorf("field cannot be empty")
 	}

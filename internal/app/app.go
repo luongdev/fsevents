@@ -13,19 +13,25 @@ import (
 
 	"fsevents/internal/config"
 	"fsevents/internal/esl"
+	"fsevents/internal/http"
 	"fsevents/internal/logger"
+	"fsevents/internal/processor"
 	"fsevents/pkg/types"
 )
 
 // App represents the main application
 type App struct {
-	config    *config.Config
-	logger    *zap.Logger
-	shutdown  chan os.Signal
-	wg        sync.WaitGroup
-	ctx       context.Context
-	cancel    context.CancelFunc
-	eslClient *esl.Client
+	config           *config.Config
+	logger           *zap.Logger
+	shutdown         chan os.Signal
+	wg               sync.WaitGroup
+	ctx              context.Context
+	cancel           context.CancelFunc
+	eslClient        *esl.Client
+	eventFilter      *processor.EventFilter
+	fieldMapper      *processor.FieldMapper
+	processorManager *processor.ProcessorManager
+	httpClient       *http.Client
 }
 
 // New creates a new application instance
@@ -115,6 +121,30 @@ func (a *App) Stop() error {
 func (a *App) startComponents() error {
 	a.logger.Info("Starting application components")
 
+	// Initialize event filter
+	a.eventFilter = processor.NewEventFilter(a.config.Events.Filters, a.logger)
+	a.logger.Info("Event filter initialized",
+		zap.Int("filter_count", a.eventFilter.GetFilterCount()))
+
+	// Initialize field mapper
+	a.fieldMapper = processor.NewFieldMapper(a.config.Events.FieldMappings, a.logger)
+	a.logger.Info("Field mapper initialized",
+		zap.Int("mapping_count", a.fieldMapper.GetMappingCount()))
+
+	// Initialize processor manager
+	var err error
+	a.processorManager, err = processor.NewProcessorManager(a.config.Events.Processors, a.logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize processor manager: %w", err)
+	}
+	a.logger.Info("Processor manager initialized",
+		zap.Int("processor_count", a.processorManager.GetProcessorCount()))
+
+	// Initialize HTTP client
+	a.httpClient = http.NewClient(a.config.HTTP.Destinations, a.fieldMapper, a.processorManager, a.config.Events.PayloadTemplate, a.logger)
+	a.logger.Info("HTTP client initialized",
+		zap.Int("destination_count", a.httpClient.GetDestinationCount()))
+
 	// Start ESL client
 	if err := a.startESLClient(); err != nil {
 		return fmt.Errorf("failed to start ESL client: %w", err)
@@ -124,9 +154,6 @@ func (a *App) startComponents() error {
 	a.logger.Info("Starting event processor...")
 	a.startEventProcessor()
 	a.logger.Info("Event processor started")
-
-	// TODO: Start HTTP client
-	a.logger.Debug("HTTP client component not implemented yet")
 
 	// TODO: Start metrics server
 	if a.config.Metrics.Enabled {
@@ -185,21 +212,81 @@ func (a *App) startEventProcessor() {
 
 // processEvent processes a single event
 func (a *App) processEvent(event *types.Event) {
-	a.logger.Info("Processing event",
+	// Apply event filters first
+	if !a.eventFilter.ShouldProcess(event) {
+		// Event was filtered out - log at debug level
+		a.logger.Debug("Event filtered out",
+			zap.String("event_name", event.Name),
+			zap.String("unique_id", event.GetHeader("Unique-ID")),
+		)
+		return
+	}
+
+	// Log the event with meaningful data
+	logFields := []zap.Field{
 		zap.String("event_name", event.Name),
-		zap.String("event_subclass", event.Subclass),
-		zap.String("unique_id", event.GetHeader("Unique-ID")),
-		zap.String("caller_id_number", event.GetHeader("Caller-Caller-ID-Number")),
-		zap.String("destination_number", event.GetHeader("Caller-Destination-Number")),
-	)
+		zap.Time("timestamp", event.Timestamp),
+	}
 
-	// TODO: Apply event filters
-	// TODO: Forward to HTTP endpoints
+	// Add subclass for CUSTOM events
+	if event.Subclass != "" {
+		logFields = append(logFields, zap.String("event_subclass", event.Subclass))
+	}
 
-	// For now, just log the event details
+	// Add channel-specific fields only if they exist
+	if uniqueID := event.GetHeader("Unique-ID"); uniqueID != "" {
+		logFields = append(logFields, zap.String("unique_id", uniqueID))
+	}
+	if callerID := event.GetHeader("Caller-Caller-ID-Number"); callerID != "" {
+		logFields = append(logFields, zap.String("caller_id_number", callerID))
+	}
+	if destination := event.GetHeader("Caller-Destination-Number"); destination != "" {
+		logFields = append(logFields, zap.String("destination_number", destination))
+	}
+
+	// Add interesting fields based on event type
+	switch event.Name {
+	case "HEARTBEAT":
+		// For HEARTBEAT, show system info
+		if sessionCount := event.GetHeader("Session-Count"); sessionCount != "" {
+			logFields = append(logFields, zap.String("session_count", sessionCount))
+		}
+		if idleCPU := event.GetHeader("Idle-Cpu"); idleCPU != "" {
+			logFields = append(logFields, zap.String("idle_cpu", idleCPU))
+		}
+		if uptime := event.GetHeader("Up-Time"); uptime != "" {
+			logFields = append(logFields, zap.String("uptime", uptime))
+		}
+	case "CHANNEL_CREATE", "CHANNEL_DESTROY", "CHANNEL_ANSWER", "CHANNEL_HANGUP":
+		// For channel events, show call info
+		if direction := event.GetHeader("Call-Direction"); direction != "" {
+			logFields = append(logFields, zap.String("call_direction", direction))
+		}
+		if state := event.GetHeader("Channel-State"); state != "" {
+			logFields = append(logFields, zap.String("channel_state", state))
+		}
+	}
+
+	// Add event sequence for tracking
+	if sequence := event.GetHeader("Event-Sequence"); sequence != "" {
+		logFields = append(logFields, zap.String("sequence", sequence))
+	}
+
+	a.logger.Info("Processing event", logFields...)
+
+	// Forward to HTTP endpoints
+	if err := a.forwardEventToHTTP(event); err != nil {
+		a.logger.Error("Failed to forward event to HTTP destinations",
+			zap.String("event_name", event.Name),
+			zap.String("unique_id", event.GetHeader("Unique-ID")),
+			zap.Error(err),
+		)
+	}
+
+	// Log additional event details for debugging
 	if event.IsChannelEvent() {
 		if channel := event.GetChannelInfo(); channel != nil {
-			a.logger.Info("Channel event details",
+			a.logger.Debug("Channel event details",
 				zap.String("channel_uuid", channel.UUID),
 				zap.String("direction", channel.Direction),
 				zap.String("state", channel.State),
@@ -210,9 +297,18 @@ func (a *App) processEvent(event *types.Event) {
 	}
 
 	if event.IsCustomEvent() {
-		a.logger.Info("Custom event received",
+		a.logger.Debug("Custom event received",
 			zap.String("subclass", event.Subclass),
 			zap.Any("headers", event.Headers),
 		)
 	}
+}
+
+// forwardEventToHTTP forwards an event to all configured HTTP destinations
+func (a *App) forwardEventToHTTP(event *types.Event) error {
+	// Create a context with timeout for the HTTP request
+	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
+	defer cancel()
+
+	return a.httpClient.ForwardEvent(ctx, event)
 }
