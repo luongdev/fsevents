@@ -40,11 +40,27 @@ http:
         initial_delay: 1s
         max_delay: 30s
 
-# Logging
+# Logging configuration
+# level: debug, info, warn, error, fatal, panic
+# format: json, console
+# output: stdout, stderr, or file path
 logging:
   level: "info"
   format: "json"
   output: "stdout"
+
+# Alternative logging examples:
+# For development with colored console output:
+# logging:
+#   level: "debug"
+#   format: "console"
+#   output: "stdout"
+
+# For production with file output:
+# logging:
+#   level: "info"
+#   format: "json"
+#   output: "/var/log/fsevents/app.log"
 
 # Metrics
 metrics:

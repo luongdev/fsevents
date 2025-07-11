@@ -2,7 +2,7 @@
 
 ## Phase 1: Core Infrastructure & Setup
 - [x] **1.1** Setup Go module và basic project structure
-- [ ] **1.2** Implement basic configuration management với Viper
+- [x] **1.2** Implement basic configuration management với Viper
 - [ ] **1.3** Setup structured logging với Zap
 - [ ] **1.4** Implement graceful shutdown handling
 - [ ] **1.5** Create basic main.go với CLI support
