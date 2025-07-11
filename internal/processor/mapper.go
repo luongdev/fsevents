@@ -3,6 +3,7 @@ package processor
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -189,19 +190,46 @@ func (m *FieldMapper) extractValue(event *types.Event, mapping config.FieldMappi
 
 // applyTransforms applies multiple transformations in sequence
 func (m *FieldMapper) applyTransforms(value string, transforms []string) interface{} {
-	result := value
+	var currentValue interface{} = value
 
 	for _, transform := range transforms {
-		result = m.applyTransform(result, transform)
+		// If current value is a string, apply string transformation
+		if strVal, ok := currentValue.(string); ok {
+			// Check if this is a type conversion or math operation
+			if transform == ":int" || transform == ":float" || transform == ":bool" || transform == ":millis" || transform == ":round" ||
+				strings.HasPrefix(transform, ":add:") || strings.HasPrefix(transform, ":subtract:") ||
+				strings.HasPrefix(transform, ":multiply:") || strings.HasPrefix(transform, ":divide:") {
+				// Apply type conversion or math operation
+				currentValue = m.convertType(strVal, transform)
+			} else {
+				// Apply string transformation
+				currentValue = m.applyTransform(strVal, transform)
+			}
+		} else {
+			// Current value is numeric, try to apply math operations or type conversions
+			if strings.HasPrefix(transform, ":add:") || strings.HasPrefix(transform, ":subtract:") ||
+				strings.HasPrefix(transform, ":multiply:") || strings.HasPrefix(transform, ":divide:") {
+				// Convert numeric value back to string for math operations
+				strVal := fmt.Sprintf("%v", currentValue)
+				if result, err := m.applyMathTransform(strVal, transform); err == nil {
+					currentValue = result
+				} else {
+					m.logger.Warn("Failed to apply math transform to numeric value",
+						zap.String("transform", transform), zap.Any("value", currentValue))
+				}
+			} else if transform == ":round" {
+				// Handle rounding on numeric values
+				strVal := fmt.Sprintf("%v", currentValue)
+				currentValue = m.convertType(strVal, transform)
+			} else {
+				// Cannot apply string transformations to numeric values
+				m.logger.Warn("Cannot apply string transform to numeric value",
+					zap.String("transform", transform), zap.Any("value", currentValue))
+			}
+		}
 	}
 
-	// Check for type conversion in the last transform
-	if len(transforms) > 0 {
-		lastTransform := transforms[len(transforms)-1]
-		return m.convertType(result, lastTransform)
-	}
-
-	return result
+	return currentValue
 }
 
 // applyTransform applies a single transformation
@@ -247,9 +275,14 @@ func (m *FieldMapper) applyTransform(value, transform string) string {
 		return value
 	case "":
 		return value // No transformation
-	case ":int", ":float", ":bool", ":millis":
+	case ":int", ":float", ":bool", ":millis", ":round":
 		return value // Type conversion happens in convertType, not here
 	default:
+		// Check for math operations
+		if strings.HasPrefix(transform, ":add:") || strings.HasPrefix(transform, ":subtract:") ||
+			strings.HasPrefix(transform, ":multiply:") || strings.HasPrefix(transform, ":divide:") {
+			return value // Math operations are handled in convertType, not here
+		}
 		// Check for regex replacement (s/pattern/replacement/)
 		if strings.HasPrefix(transform, "s/") && strings.Count(transform, "/") >= 2 {
 			parts := strings.Split(transform[2:], "/")
@@ -291,6 +324,21 @@ func (m *FieldMapper) convertType(value, transform string) interface{} {
 			return millis
 		}
 		m.logger.Warn("Failed to convert to milliseconds", zap.String("value", value))
+	case ":round":
+		// Round numeric value to nearest integer
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			return int64(math.Round(floatVal))
+		}
+		m.logger.Warn("Failed to convert to number for rounding", zap.String("value", value))
+	}
+
+	// Check for math operations on numeric values
+	if strings.HasPrefix(transform, ":add:") || strings.HasPrefix(transform, ":subtract:") ||
+		strings.HasPrefix(transform, ":multiply:") || strings.HasPrefix(transform, ":divide:") {
+		if result, err := m.applyMathTransform(value, transform); err == nil {
+			return result
+		}
+		m.logger.Warn("Failed to apply math transform", zap.String("transform", transform), zap.String("value", value))
 	}
 
 	// Return as string by default
@@ -334,6 +382,65 @@ func (m *FieldMapper) parseToMilliseconds(value string) (int64, error) {
 	}
 
 	return 0, fmt.Errorf("unable to parse date: %s", value)
+}
+
+// applyMathTransform applies mathematical operations to numeric values
+func (m *FieldMapper) applyMathTransform(value, transform string) (interface{}, error) {
+	// Parse the transform format: :operation:operand
+	parts := strings.Split(transform, ":")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid math transform format: %s", transform)
+	}
+
+	operation := parts[1]
+	operandStr := parts[2]
+
+	// Try to parse the input value as different numeric types
+	var inputFloat float64
+	var isFloat bool
+
+	// First try to parse as integer
+	if intVal, err := strconv.ParseInt(value, 10, 64); err == nil {
+		inputFloat = float64(intVal)
+	} else if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+		// If not integer, try float
+		inputFloat = floatVal
+		isFloat = true
+	} else {
+		return nil, fmt.Errorf("cannot parse value as number: %s", value)
+	}
+
+	// Parse operand as float to handle both int and float operations
+	operand, err := strconv.ParseFloat(operandStr, 64)
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse operand as number: %s", operandStr)
+	}
+
+	// Apply the operation
+	var result float64
+	switch operation {
+	case "add":
+		result = inputFloat + operand
+	case "subtract":
+		result = inputFloat - operand
+	case "multiply":
+		result = inputFloat * operand
+	case "divide":
+		if operand == 0 {
+			return nil, fmt.Errorf("division by zero")
+		}
+		result = inputFloat / operand
+	default:
+		return nil, fmt.Errorf("unknown math operation: %s", operation)
+	}
+
+	// Return the result in appropriate type
+	// If input was integer and result is a whole number, return as int64
+	if !isFloat && result == float64(int64(result)) {
+		return int64(result), nil
+	}
+	// Otherwise return as float64
+	return result, nil
 }
 
 // GetMappingCount returns the number of configured mappings

@@ -29,10 +29,15 @@ events:
           to: "cpu_idle"
           transforms: [":float"]
         
-        # Transform FreeSWITCH uptime từ microseconds sang milliseconds
+        # Transform FreeSWITCH uptime từ milliseconds sang hours
         - from: "FreeSWITCH-Uptime-msec" 
-          to: "uptime_millis"
-          transforms: [":millis"]
+          to: "uptime_hours"
+          transforms: [":int", ":divide:3600000"]
+        
+        # Convert CPU idle percentage to busy percentage (rounded)
+        - from: "Idle-Cpu"
+          to: "cpu_busy_percent"
+          transforms: [":float", ":subtract:100", ":multiply:-1", ":round"]
         
         # Transform event date sang milliseconds
         - from: "Event-Date-Timestamp"
@@ -43,7 +48,8 @@ events:
         include_fields:
           - "active_sessions"
           - "cpu_idle" 
-          - "uptime_millis"
+          - "cpu_busy_percent"
+          - "uptime_hours"
           - "timestamp"
 
     # CHANNEL events với timestamp fields
@@ -58,21 +64,27 @@ events:
         - from: "Caller-Destination-Number"
           to: "destination_number"
         
-        # Transform creation time từ microseconds sang milliseconds
+        # Transform creation time từ microseconds sang seconds
         - from: "Caller-Channel-Created-Time"
-          to: "created_time_millis"
-          transforms: [":millis"]
+          to: "created_time_seconds"
+          transforms: [":int", ":divide:1000000"]
         
-        # Transform answered time nếu có
+        # Transform answered time sang seconds nếu có
         - from: "Caller-Channel-Answered-Time"
-          to: "answered_time_millis" 
-          transforms: [":millis"]
+          to: "answered_time_seconds" 
+          transforms: [":int", ":divide:1000000"]
           default_value: "0"
         
-        # Transform hangup time cho HANGUP events
+        # Transform hangup time sang seconds cho HANGUP events
         - from: "Caller-Channel-Hangup-Time"
-          to: "hangup_time_millis"
-          transforms: [":millis"]
+          to: "hangup_time_seconds"
+          transforms: [":int", ":divide:1000000"]
+          default_value: "0"
+        
+        # Calculate call duration in minutes for HANGUP events (rounded)
+        - from: "variable_billsec"
+          to: "call_duration_minutes"
+          transforms: [":int", ":divide:60", ":round"]
           default_value: "0"
       
       field_filters:
@@ -80,9 +92,10 @@ events:
           - "channel_uuid"
           - "caller_number"
           - "destination_number"
-          - "created_time_millis"
-          - "answered_time_millis"
-          - "hangup_time_millis"
+          - "created_time_seconds"
+          - "answered_time_seconds"
+          - "hangup_time_seconds"
+          - "call_duration_minutes"
 
     # CUSTOM callcenter events
     - event_types: ["CUSTOM callcenter::*"] 
@@ -103,10 +116,16 @@ events:
           to: "agent_state"
           transforms: ["url_decode"]
         
-        # Transform agent login time từ Unix timestamp sang milliseconds
+        # Transform agent login time từ Unix timestamp sang minutes (keep as timestamp)
         - from: "Cc-Agent-Login-Time"
-          to: "login_time_millis"
-          transforms: [":millis"]
+          to: "login_timestamp_seconds"
+          transforms: [":int"]
+          default_value: "0"
+        
+        # Calculate agent session time in minutes  
+        - from: "Cc-Agent-Session-Time"
+          to: "session_time_minutes"
+          transforms: [":int", ":divide:60"]
           default_value: "0"
       
       field_filters:
@@ -115,7 +134,8 @@ events:
           - "agent_id"
           - "queue_name" 
           - "agent_state"
-          - "login_time_millis"
+          - "login_timestamp_seconds"
+          - "session_time_minutes"
 
   # Global field filters - áp dụng khi không có event-specific filters
   field_filters:

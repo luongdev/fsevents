@@ -18,7 +18,7 @@ events:
   field_mappings:
     - from: "Event-Date-Timestamp"
       to: "timestamp"
-      transforms: [":int"]
+      transforms: [":int", ":divide:1000", ":round"]
 
   event_field_mappings:
     - event_types: ["CUSTOM callcenter::*"]

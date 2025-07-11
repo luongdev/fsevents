@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -453,6 +454,8 @@ func (f *FieldMapping) Validate() error {
 		":int":          true,
 		":float":        true,
 		":bool":         true,
+		":millis":       true,
+		":round":        true,
 		"":              true, // Empty transform is valid
 	}
 
@@ -465,6 +468,12 @@ func (f *FieldMapping) Validate() error {
 				if _, err := regexp.Compile(pattern); err != nil {
 					return fmt.Errorf("invalid regex pattern in transform %d: %w", i, err)
 				}
+			}
+		} else if strings.HasPrefix(transform, ":add:") || strings.HasPrefix(transform, ":subtract:") ||
+			strings.HasPrefix(transform, ":multiply:") || strings.HasPrefix(transform, ":divide:") {
+			// Validate math operations format
+			if err := validateMathTransform(transform); err != nil {
+				return fmt.Errorf("invalid math transform in transform %d: %w", i, err)
 			}
 		} else if !validTransforms[transform] {
 			return fmt.Errorf("invalid transform type in transform %d: %s", i, transform)
@@ -568,4 +577,42 @@ func isValidPattern(pattern string) bool {
 	// Basic pattern validation - allow alphanumeric, underscore, hyphen, dot, colon, and wildcards
 	validPatternRegex := regexp.MustCompile(`^[a-zA-Z0-9_\-\.\:\*]+$`)
 	return validPatternRegex.MatchString(pattern)
+}
+
+// validateMathTransform validates math operation transforms like :add:10, :divide:1000
+func validateMathTransform(transform string) error {
+	// Parse the transform format: :operation:operand
+	parts := strings.Split(transform, ":")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid math transform format: %s (expected format: :operation:operand)", transform)
+	}
+
+	operation := parts[1]
+	operandStr := parts[2]
+
+	// Validate operation
+	validOperations := map[string]bool{
+		"add":      true,
+		"subtract": true,
+		"multiply": true,
+		"divide":   true,
+	}
+
+	if !validOperations[operation] {
+		return fmt.Errorf("invalid math operation: %s (valid: add, subtract, multiply, divide)", operation)
+	}
+
+	// Validate operand is a valid number
+	if _, err := strconv.ParseFloat(operandStr, 64); err != nil {
+		return fmt.Errorf("invalid operand '%s': must be a valid number", operandStr)
+	}
+
+	// Special validation for division by zero
+	if operation == "divide" {
+		if operand, _ := strconv.ParseFloat(operandStr, 64); operand == 0 {
+			return fmt.Errorf("division by zero is not allowed")
+		}
+	}
+
+	return nil
 }
