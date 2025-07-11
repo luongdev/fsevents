@@ -16,6 +16,12 @@ events:
     - CHANNEL_DESTROY
     - CHANNEL_ANSWER
     - CHANNEL_HANGUP
+    # CUSTOM events - flexible naming (with or without namespace)
+    - "CUSTOM callcenter::info"
+    - "CUSTOM sofia::register"
+    - "CUSTOM my-custom-event"
+    - "CUSTOM app_notification"
+    - "CUSTOM conference maintenance"
   filters:
     - field: "Event-Name"
       operator: "equals"
@@ -23,6 +29,10 @@ events:
     - field: "Caller-Destination-Number"
       operator: "regex"
       value: "^84[0-9]{9}$"
+    # Filter for CUSTOM events
+    - field: "Event-Subclass"
+      operator: "equals"
+      value: "callcenter::info"
 
 # HTTP destinations
 http:

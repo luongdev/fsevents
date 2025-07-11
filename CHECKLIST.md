@@ -3,16 +3,16 @@
 ## Phase 1: Core Infrastructure & Setup
 - [x] **1.1** Setup Go module và basic project structure
 - [x] **1.2** Implement basic configuration management với Viper
-- [ ] **1.3** Setup structured logging với Zap
-- [ ] **1.4** Implement graceful shutdown handling
-- [ ] **1.5** Create basic main.go với CLI support
+- [x] **1.3** Setup structured logging với Zap
+- [x] **1.4** Implement graceful shutdown handling
+- [x] **1.5** Create basic main.go với CLI support
 
 ## Phase 2: Configuration System
-- [ ] **2.1** Define configuration structs
-- [ ] **2.2** Implement configuration loading (file, env, flags)
-- [ ] **2.3** Add configuration validation
-- [ ] **2.4** Create example config file
-- [ ] **2.5** Test configuration loading với different sources
+- [x] **2.1** Define configuration structs
+- [x] **2.2** Implement configuration loading (file, env, flags)
+- [x] **2.3** Add configuration validation
+- [x] **2.4** Create example config file
+- [x] **2.5** Test configuration loading với different sources
 
 ## Phase 3: ESL Client Foundation
 - [ ] **3.1** Add ESL client dependency
