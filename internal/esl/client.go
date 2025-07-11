@@ -204,12 +204,6 @@ func (c *Client) convertEvent(event *eslgo.Event) *types.Event {
 		}
 	}
 
-	c.logger.Debug("Converted ESL event",
-		zap.String("event_name", fsEvent.Name),
-		zap.String("event_subclass", fsEvent.Subclass),
-		zap.String("unique_id", fsEvent.GetHeader("Unique-ID")),
-		zap.Int("headers_count", len(fsEvent.Headers)))
-
 	return fsEvent
 }
 

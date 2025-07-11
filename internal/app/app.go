@@ -222,84 +222,12 @@ func (a *App) processEvent(event *types.Event) {
 		return
 	}
 
-	// Log the event with meaningful data
-	logFields := []zap.Field{
-		zap.String("event_name", event.Name),
-		zap.Time("timestamp", event.Timestamp),
-	}
-
-	// Add subclass for CUSTOM events
-	if event.Subclass != "" {
-		logFields = append(logFields, zap.String("event_subclass", event.Subclass))
-	}
-
-	// Add channel-specific fields only if they exist
-	if uniqueID := event.GetHeader("Unique-ID"); uniqueID != "" {
-		logFields = append(logFields, zap.String("unique_id", uniqueID))
-	}
-	if callerID := event.GetHeader("Caller-Caller-ID-Number"); callerID != "" {
-		logFields = append(logFields, zap.String("caller_id_number", callerID))
-	}
-	if destination := event.GetHeader("Caller-Destination-Number"); destination != "" {
-		logFields = append(logFields, zap.String("destination_number", destination))
-	}
-
-	// Add interesting fields based on event type
-	switch event.Name {
-	case "HEARTBEAT":
-		// For HEARTBEAT, show system info
-		if sessionCount := event.GetHeader("Session-Count"); sessionCount != "" {
-			logFields = append(logFields, zap.String("session_count", sessionCount))
-		}
-		if idleCPU := event.GetHeader("Idle-Cpu"); idleCPU != "" {
-			logFields = append(logFields, zap.String("idle_cpu", idleCPU))
-		}
-		if uptime := event.GetHeader("Up-Time"); uptime != "" {
-			logFields = append(logFields, zap.String("uptime", uptime))
-		}
-	case "CHANNEL_CREATE", "CHANNEL_DESTROY", "CHANNEL_ANSWER", "CHANNEL_HANGUP":
-		// For channel events, show call info
-		if direction := event.GetHeader("Call-Direction"); direction != "" {
-			logFields = append(logFields, zap.String("call_direction", direction))
-		}
-		if state := event.GetHeader("Channel-State"); state != "" {
-			logFields = append(logFields, zap.String("channel_state", state))
-		}
-	}
-
-	// Add event sequence for tracking
-	if sequence := event.GetHeader("Event-Sequence"); sequence != "" {
-		logFields = append(logFields, zap.String("sequence", sequence))
-	}
-
-	a.logger.Info("Processing event", logFields...)
-
 	// Forward to HTTP endpoints
 	if err := a.forwardEventToHTTP(event); err != nil {
 		a.logger.Error("Failed to forward event to HTTP destinations",
 			zap.String("event_name", event.Name),
 			zap.String("unique_id", event.GetHeader("Unique-ID")),
 			zap.Error(err),
-		)
-	}
-
-	// Log additional event details for debugging
-	if event.IsChannelEvent() {
-		if channel := event.GetChannelInfo(); channel != nil {
-			a.logger.Debug("Channel event details",
-				zap.String("channel_uuid", channel.UUID),
-				zap.String("direction", channel.Direction),
-				zap.String("state", channel.State),
-				zap.String("caller_id", channel.CallerIDNumber),
-				zap.String("destination", channel.DestinationNumber),
-			)
-		}
-	}
-
-	if event.IsCustomEvent() {
-		a.logger.Debug("Custom event received",
-			zap.String("subclass", event.Subclass),
-			zap.Any("headers", event.Headers),
 		)
 	}
 }
