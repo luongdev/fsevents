@@ -127,7 +127,7 @@ func (a *App) startComponents() error {
 		zap.Int("filter_count", a.eventFilter.GetFilterCount()))
 
 	// Initialize field mapper
-	a.fieldMapper = processor.NewFieldMapper(a.config.Events.FieldMappings, a.config.Events.EventFieldMappings, a.logger)
+	a.fieldMapper = processor.NewFieldMapper(a.config.Events.FieldMappings, a.config.Events.EventFieldMappings, a.config.Events.FieldFilters, a.logger)
 	a.logger.Info("Field mapper initialized",
 		zap.Int("mapping_count", a.fieldMapper.GetMappingCount()))
 

@@ -1,0 +1,194 @@
+# FreeSWITCH ESL Sidecar Configuration with Milliseconds Transform
+
+# ESL connection configuration  
+esl:
+  host: "192.168.13.137"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 10
+
+# Event filtering and processing with milliseconds transforms
+events:
+  subscribe_events:
+    - "HEARTBEAT"
+    - "CHANNEL_CREATE"
+    - "CHANNEL_HANGUP"
+    - "CUSTOM callcenter::info"
+
+  event_field_mappings:
+    # HEARTBEAT events với timestamp transform
+    - event_types: ["HEARTBEAT"]
+      mappings:
+        - from: "Session-Count"
+          to: "active_sessions"
+          transforms: [":int"]
+        
+        - from: "Idle-Cpu"
+          to: "cpu_idle"
+          transforms: [":float"]
+        
+        # Transform FreeSWITCH uptime từ microseconds sang milliseconds
+        - from: "FreeSWITCH-Uptime-msec" 
+          to: "uptime_millis"
+          transforms: [":millis"]
+        
+        # Transform event date sang milliseconds
+        - from: "Event-Date-Timestamp"
+          to: "timestamp"
+          transforms: [":int"]
+      
+      field_filters:
+        include_fields:
+          - "active_sessions"
+          - "cpu_idle" 
+          - "uptime_millis"
+          - "timestamp"
+
+    # CHANNEL events với timestamp fields
+    - event_types: ["CHANNEL_*"]
+      mappings:
+        - from: "Unique-ID"
+          to: "channel_uuid"
+        
+        - from: "Caller-Caller-ID-Number" 
+          to: "caller_number"
+        
+        - from: "Caller-Destination-Number"
+          to: "destination_number"
+        
+        # Transform creation time từ microseconds sang milliseconds
+        - from: "Caller-Channel-Created-Time"
+          to: "created_time_millis"
+          transforms: [":millis"]
+        
+        # Transform answered time nếu có
+        - from: "Caller-Channel-Answered-Time"
+          to: "answered_time_millis" 
+          transforms: [":millis"]
+          default_value: "0"
+        
+        # Transform hangup time cho HANGUP events
+        - from: "Caller-Channel-Hangup-Time"
+          to: "hangup_time_millis"
+          transforms: [":millis"]
+          default_value: "0"
+      
+      field_filters:
+        include_fields:
+          - "channel_uuid"
+          - "caller_number"
+          - "destination_number"
+          - "created_time_millis"
+          - "answered_time_millis"
+          - "hangup_time_millis"
+
+    # CUSTOM callcenter events
+    - event_types: ["CUSTOM callcenter::*"] 
+      mappings:
+        - from: "Cc-Action"
+          to: "action"
+          transforms: ["trim"]
+        
+        - from: "Cc-Agent"
+          to: "agent_id"
+          transforms: ["trim"]
+        
+        - from: "Cc-Queue"
+          to: "queue_name"
+          transforms: ["trim"]
+        
+        - from: "Cc-Agent-State"
+          to: "agent_state"
+          transforms: ["url_decode"]
+        
+        # Transform agent login time từ Unix timestamp sang milliseconds
+        - from: "Cc-Agent-Login-Time"
+          to: "login_time_millis"
+          transforms: [":millis"]
+          default_value: "0"
+      
+      field_filters:
+        include_fields:
+          - "action"
+          - "agent_id"
+          - "queue_name" 
+          - "agent_state"
+          - "login_time_millis"
+
+  # Global field filters - áp dụng khi không có event-specific filters
+  field_filters:
+    # Chỉ include headers cần thiết
+    include_headers:
+      - "Event-*"        # Event metadata
+      - "Unique-ID"      # Channel UUID
+      - "Caller-*"       # Caller info
+      - "Cc-*"           # Callcenter headers
+    
+    # Exclude headers không cần thiết để tiết kiệm bandwidth
+    exclude_headers:
+      - "*-Ipv6"         # IPv6 addresses
+      - "*-Switchname"   # Switch internal names
+      - "variable_*"     # Most variables (keep specific ones in mappings)
+    
+    # Không include body để tiết kiệm bandwidth
+    include_body: false
+
+# HTTP destinations
+http:
+  destinations:
+    - name: "main_webhook"
+      url: "http://localhost:8080/webhook"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer your-token"
+      timeout: 30s
+      retry:
+        max_attempts: 3
+        delay: 1s
+        backoff: 2.0
+      event_filters:
+        - "*"  # Forward all processed events
+
+    # Destination chỉ cho callcenter events
+    - name: "callcenter_webhook"
+      url: "http://localhost:8081/callcenter"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      timeout: 15s
+      retry:
+        max_attempts: 2
+        delay: 500ms
+        backoff: 1.5
+      event_filters:
+        - "CUSTOM callcenter::*"
+
+    # Destination chỉ cho channel events với timeout ngắn
+    - name: "realtime_webhook"
+      url: "http://localhost:8082/realtime"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Event-Type: "channel"
+      timeout: 5s
+      retry:
+        max_attempts: 1
+        delay: 100ms
+      event_filters:
+        - "CHANNEL_CREATE"
+        - "CHANNEL_HANGUP"
+
+# Logging configuration
+logging:
+  level: "info"
+  format: "json" 
+  file: "logs/fsevents.log"
+
+# Metrics configuration
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics" 

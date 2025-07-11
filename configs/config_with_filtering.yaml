@@ -1,0 +1,152 @@
+# FreeSWITCH ESL Sidecar App Configuration - Field Filtering Example
+
+# FreeSWITCH ESL Connection
+esl:
+  host: "192.168.13.137"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 10
+
+# Event filtering and processing
+events:
+  subscribe_events:
+    - "HEARTBEAT"
+    - "CUSTOM callcenter::info"
+
+  # Global field filters - áp dụng cho tất cả events
+  field_filters:
+    # Chỉ include headers cần thiết cho tất cả events
+    include_headers:
+      - "Event-*"        # All Event- headers
+      - "Unique-ID"      # Channel UUID
+      - "Cc-*"           # All callcenter headers
+    # Exclude headers không cần thiết
+    exclude_headers:
+      - "*-Ipv6"         # IPv6 addresses
+      - "*-Switchname"   # Switch internal names
+      - "*-Calling-*"    # Internal calling details
+    # Không include body để tiết kiệm bandwidth
+    include_body: false
+
+  event_field_mappings:
+    # CUSTOM callcenter events với field filtering
+    - event_types: ["CUSTOM callcenter::*"]
+      mappings:
+        - from: "Cc-Action"
+          to: "action"
+          transforms: ["trim"]
+        
+        - from: "Cc-Agent"
+          to: "agent_id"
+          transforms: ["trim"]
+        
+        - from: "Cc-Queue"
+          to: "queue_name"
+          transforms: ["trim"]
+        
+        - from: "Cc-Agent-State"
+          to: "agent_state"
+          transforms: ["url_decode"]
+        
+        - from: "Cc-Agent-Status"
+          to: "agent_status"
+          transforms: ["url_decode", "trim"]
+
+      # Event-specific field filtering - chỉ cho callcenter events
+      field_filters:
+        # Chỉ include fields cần thiết trong payload final
+        include_fields:
+          - "timestamp"      # Always include basic info
+          - "event_name" 
+          - "event_subclass"
+          - "action"         # Mapped fields only
+          - "agent_id"
+          - "queue_name"
+          - "agent_state"
+          - "agent_status"
+        # Exclude các fields không cần thiết
+        exclude_fields:
+          - "headers"        # Không include raw headers vì đã có mapped fields
+        # Include body cho callcenter events nếu có data quan trọng
+        include_body: true
+
+    # HEARTBEAT events với minimal fields
+    - event_types: ["HEARTBEAT"]
+      mappings:
+        - from: "Session-Count"
+          to: "active_sessions"
+          transforms: [":int"]
+        
+        - from: "Idle-Cpu"
+          to: "cpu_idle"
+          transforms: [":float"]
+
+      # Field filtering cho HEARTBEAT - chỉ giữ lại thông tin cần thiết
+      field_filters:
+        # Chỉ include headers system monitoring
+        include_headers:
+          - "Event-*"
+          - "Session-*"
+          - "Idle-*"
+          - "Up-Time"
+          - "FreeSWITCH-Uptime-*"
+        exclude_headers:
+          - "*-Hostname"
+          - "*-Ipv*"
+          - "*-UUID"
+        # Chỉ giữ lại essential fields
+        include_fields:
+          - "timestamp"
+          - "event_name" 
+          - "active_sessions"
+          - "cpu_idle"
+        exclude_fields:
+          - "headers"        # Không cần raw headers
+        include_body: false  # HEARTBEAT không có body
+
+# HTTP destinations với selective routing
+http:
+  destinations:
+    - name: "callcenter-analytics"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-callcenter"
+      timeout: 5s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      event_filters:
+        - "CUSTOM callcenter::*"
+
+    - name: "system-monitor"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-system"
+      timeout: 5s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      event_filters:
+        - "HEARTBEAT"
+
+# Logging
+logging:
+  level: "debug"
+  format: "console"
+  output: "stdout"
+
+# Metrics
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics" 

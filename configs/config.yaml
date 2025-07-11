@@ -15,6 +15,11 @@ events:
     - "HEARTBEAT"
     - "CUSTOM callcenter::info"
 
+  field_mappings:
+    - from: "Event-Date-Timestamp"
+      to: "timestamp"
+      transforms: [":int"]
+
   event_field_mappings:
     - event_types: ["CUSTOM callcenter::*"]
       mappings:
@@ -37,7 +42,31 @@ events:
         - from: "Cc-Agent-Status"
           to: "agent_status"
           transforms: ["url_decode"]
-      
+      field_filters:
+        include_fields:
+          - "timestamp" 
+          - "action"         # Mapped fields only
+          - "agent_id"
+          - "queue_name"
+          - "agent_state"
+          - "agent_status"
+        exclude_fields:
+          - "headers"
+          - "event_subclass"
+          - "event_name"
+        include_body: false
+  field_filters:
+    include_headers:
+      - "Event-*"        # All Event- headers
+      - "Unique-ID"      # Channel UUID
+      - "Cc-*"           # All callcenter headers
+    # Exclude headers không cần thiết
+    exclude_headers:
+      - "*-Ipv6"         # IPv6 addresses
+      - "*-Switchname"   # Switch internal names
+      - "*-Calling-*"    # Internal calling details
+    # Không include body để tiết kiệm bandwidth
+    include_body: false    
 
 # HTTP destinations với selective routing
 http:

@@ -174,6 +174,27 @@ func (e *EventsConfig) Validate() error {
 		}
 	}
 
+	// Validate field mappings
+	for i, mapping := range e.FieldMappings {
+		if err := mapping.Validate(); err != nil {
+			return fmt.Errorf("field mapping %d error: %w", i, err)
+		}
+	}
+
+	// Validate event field mappings
+	for i, eventMapping := range e.EventFieldMappings {
+		if err := eventMapping.Validate(); err != nil {
+			return fmt.Errorf("event field mapping %d error: %w", i, err)
+		}
+	}
+
+	// Validate global field filters
+	if e.FieldFilters != nil {
+		if err := e.FieldFilters.Validate(); err != nil {
+			return fmt.Errorf("global field filters error: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -405,4 +426,146 @@ func (m *MetricsConfig) Validate() error {
 	}
 
 	return nil
+}
+
+// Validate validates FieldMapping configuration
+func (f *FieldMapping) Validate() error {
+	if f.From == "" {
+		return fmt.Errorf("from field cannot be empty")
+	}
+
+	if f.To == "" {
+		return fmt.Errorf("to field cannot be empty")
+	}
+
+	// Validate transform types
+	validTransforms := map[string]bool{
+		"lowercase":     true,
+		"uppercase":     true,
+		"trim":          true,
+		"reverse":       true,
+		"first_word":    true,
+		"last_word":     true,
+		"url_encode":    true,
+		"url_decode":    true,
+		"base64_encode": true,
+		"base64_decode": true,
+		":int":          true,
+		":float":        true,
+		":bool":         true,
+		"":              true, // Empty transform is valid
+	}
+
+	for i, transform := range f.Transforms {
+		// Check regex replacement pattern
+		if strings.HasPrefix(transform, "s/") && strings.Count(transform, "/") >= 2 {
+			parts := strings.Split(transform[2:], "/")
+			if len(parts) >= 2 {
+				pattern := parts[0]
+				if _, err := regexp.Compile(pattern); err != nil {
+					return fmt.Errorf("invalid regex pattern in transform %d: %w", i, err)
+				}
+			}
+		} else if !validTransforms[transform] {
+			return fmt.Errorf("invalid transform type in transform %d: %s", i, transform)
+		}
+	}
+
+	// Validate event types if specified
+	for i, eventType := range f.EventTypes {
+		if !isValidEventFilter(eventType) {
+			return fmt.Errorf("invalid event type %d: %s", i, eventType)
+		}
+	}
+
+	return nil
+}
+
+// Validate validates EventFieldMappings configuration
+func (e *EventFieldMappings) Validate() error {
+	if len(e.EventTypes) == 0 {
+		return fmt.Errorf("event_types cannot be empty")
+	}
+
+	// Validate event types
+	for i, eventType := range e.EventTypes {
+		if !isValidEventFilter(eventType) {
+			return fmt.Errorf("invalid event type %d: %s", i, eventType)
+		}
+	}
+
+	// Validate mappings
+	for i, mapping := range e.Mappings {
+		if err := mapping.Validate(); err != nil {
+			return fmt.Errorf("mapping %d error: %w", i, err)
+		}
+	}
+
+	// Validate field filters
+	if e.FieldFilters != nil {
+		if err := e.FieldFilters.Validate(); err != nil {
+			return fmt.Errorf("field filters error: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// Validate validates FieldFilter configuration
+func (f *FieldFilter) Validate() error {
+	// Validate include/exclude header patterns
+	for i, pattern := range f.IncludeHeaders {
+		if pattern == "" {
+			return fmt.Errorf("include header pattern %d cannot be empty", i)
+		}
+		if !isValidPattern(pattern) {
+			return fmt.Errorf("invalid include header pattern %d: %s", i, pattern)
+		}
+	}
+
+	for i, pattern := range f.ExcludeHeaders {
+		if pattern == "" {
+			return fmt.Errorf("exclude header pattern %d cannot be empty", i)
+		}
+		if !isValidPattern(pattern) {
+			return fmt.Errorf("invalid exclude header pattern %d: %s", i, pattern)
+		}
+	}
+
+	// Validate include/exclude field patterns
+	for i, pattern := range f.IncludeFields {
+		if pattern == "" {
+			return fmt.Errorf("include field pattern %d cannot be empty", i)
+		}
+		if !isValidPattern(pattern) {
+			return fmt.Errorf("invalid include field pattern %d: %s", i, pattern)
+		}
+	}
+
+	for i, pattern := range f.ExcludeFields {
+		if pattern == "" {
+			return fmt.Errorf("exclude field pattern %d cannot be empty", i)
+		}
+		if !isValidPattern(pattern) {
+			return fmt.Errorf("invalid exclude field pattern %d: %s", i, pattern)
+		}
+	}
+
+	return nil
+}
+
+// isValidPattern validates field/header pattern format (supports wildcards)
+func isValidPattern(pattern string) bool {
+	if pattern == "" {
+		return false
+	}
+
+	// Allow wildcard
+	if pattern == "*" {
+		return true
+	}
+
+	// Basic pattern validation - allow alphanumeric, underscore, hyphen, dot, colon, and wildcards
+	validPatternRegex := regexp.MustCompile(`^[a-zA-Z0-9_\-\.\:\*]+$`)
+	return validPatternRegex.MatchString(pattern)
 }

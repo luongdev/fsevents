@@ -37,10 +37,20 @@ type FieldMapping struct {
 	EventTypes   []string `mapstructure:"event_types" yaml:"event_types"`     // Which events this mapping applies to (empty = all events)
 }
 
+// FieldFilter defines what fields to include/exclude from events
+type FieldFilter struct {
+	IncludeHeaders []string `mapstructure:"include_headers" yaml:"include_headers"` // Headers to include from raw event (supports wildcards)
+	ExcludeHeaders []string `mapstructure:"exclude_headers" yaml:"exclude_headers"` // Headers to exclude from raw event (supports wildcards)
+	IncludeFields  []string `mapstructure:"include_fields" yaml:"include_fields"`   // Mapped fields to include in payload (supports wildcards)
+	ExcludeFields  []string `mapstructure:"exclude_fields" yaml:"exclude_fields"`   // Mapped fields to exclude from payload (supports wildcards)
+	IncludeBody    bool     `mapstructure:"include_body" yaml:"include_body"`       // Whether to include event body
+}
+
 // EventFieldMappings defines field mappings for specific event types
 type EventFieldMappings struct {
-	EventTypes []string       `mapstructure:"event_types" yaml:"event_types"` // Which events this applies to
-	Mappings   []FieldMapping `mapstructure:"mappings" yaml:"mappings"`       // Field mappings for these events
+	EventTypes   []string       `mapstructure:"event_types" yaml:"event_types"`     // Which events this applies to
+	Mappings     []FieldMapping `mapstructure:"mappings" yaml:"mappings"`           // Field mappings for these events
+	FieldFilters *FieldFilter   `mapstructure:"field_filters" yaml:"field_filters"` // Field filtering rules for these events
 }
 
 // ProcessorConfig defines custom event processor configuration
@@ -64,6 +74,7 @@ type EventsConfig struct {
 	Filters            []FilterRule         `mapstructure:"filters" yaml:"filters"`
 	FieldMappings      []FieldMapping       `mapstructure:"field_mappings" yaml:"field_mappings"`             // Global field mappings
 	EventFieldMappings []EventFieldMappings `mapstructure:"event_field_mappings" yaml:"event_field_mappings"` // Event-specific field mappings
+	FieldFilters       *FieldFilter         `mapstructure:"field_filters" yaml:"field_filters"`               // Global field filtering rules
 	Processors         []ProcessorConfig    `mapstructure:"processors" yaml:"processors"`
 	PayloadTemplate    *PayloadTemplate     `mapstructure:"payload_template" yaml:"payload_template"`
 }
