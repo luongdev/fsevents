@@ -1,0 +1,53 @@
+# FreeSWITCH ESL Sidecar App Configuration
+
+# FreeSWITCH ESL Connection
+esl:
+  host: "localhost"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 10
+
+# Event filtering
+events:
+  subscribe_events:
+    - CHANNEL_CREATE
+    - CHANNEL_DESTROY
+    - CHANNEL_ANSWER
+    - CHANNEL_HANGUP
+  filters:
+    - field: "Event-Name"
+      operator: "equals"
+      value: "CHANNEL_CREATE"
+    - field: "Caller-Destination-Number"
+      operator: "regex"
+      value: "^84[0-9]{9}$"
+
+# HTTP destinations
+http:
+  destinations:
+    - name: "webhook1"
+      url: "https://api.example.com/webhook"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer token"
+      timeout: 30s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+
+# Logging
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+
+# Metrics
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics" 
