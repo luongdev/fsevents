@@ -30,10 +30,17 @@ type ESLConfig struct {
 
 // FieldMapping defines how to map event headers to output fields
 type FieldMapping struct {
-	From         string `mapstructure:"from" yaml:"from"`                   // Source header name
-	To           string `mapstructure:"to" yaml:"to"`                       // Target field name
-	DefaultValue string `mapstructure:"default_value" yaml:"default_value"` // Default value if header missing
-	Transform    string `mapstructure:"transform" yaml:"transform"`         // Optional transformation (lowercase, uppercase, etc.)
+	From         string   `mapstructure:"from" yaml:"from"`                   // Source header name
+	To           string   `mapstructure:"to" yaml:"to"`                       // Target field name
+	DefaultValue string   `mapstructure:"default_value" yaml:"default_value"` // Default value if header missing
+	Transforms   []string `mapstructure:"transforms" yaml:"transforms"`       // Multiple transformations in order
+	EventTypes   []string `mapstructure:"event_types" yaml:"event_types"`     // Which events this mapping applies to (empty = all events)
+}
+
+// EventFieldMappings defines field mappings for specific event types
+type EventFieldMappings struct {
+	EventTypes []string       `mapstructure:"event_types" yaml:"event_types"` // Which events this applies to
+	Mappings   []FieldMapping `mapstructure:"mappings" yaml:"mappings"`       // Field mappings for these events
 }
 
 // ProcessorConfig defines custom event processor configuration
@@ -53,11 +60,12 @@ type PayloadTemplate struct {
 
 // EventsConfig defines event subscription and processing configuration
 type EventsConfig struct {
-	SubscribeEvents []string          `mapstructure:"subscribe_events" yaml:"subscribe_events"`
-	Filters         []FilterRule      `mapstructure:"filters" yaml:"filters"`
-	FieldMappings   []FieldMapping    `mapstructure:"field_mappings" yaml:"field_mappings"`
-	Processors      []ProcessorConfig `mapstructure:"processors" yaml:"processors"`
-	PayloadTemplate *PayloadTemplate  `mapstructure:"payload_template" yaml:"payload_template"`
+	SubscribeEvents    []string             `mapstructure:"subscribe_events" yaml:"subscribe_events"`
+	Filters            []FilterRule         `mapstructure:"filters" yaml:"filters"`
+	FieldMappings      []FieldMapping       `mapstructure:"field_mappings" yaml:"field_mappings"`             // Global field mappings
+	EventFieldMappings []EventFieldMappings `mapstructure:"event_field_mappings" yaml:"event_field_mappings"` // Event-specific field mappings
+	Processors         []ProcessorConfig    `mapstructure:"processors" yaml:"processors"`
+	PayloadTemplate    *PayloadTemplate     `mapstructure:"payload_template" yaml:"payload_template"`
 }
 
 // FilterRule represents a single event filter rule (renamed from EventFilter)

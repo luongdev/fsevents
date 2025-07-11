@@ -1,7 +1,12 @@
 package processor
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -192,6 +197,10 @@ func (bp *BuiltinProcessor) applyRule(event *types.Event, data map[string]interf
 		return bp.removeField(data, rule)
 	case "rename_field":
 		return bp.renameField(data, rule)
+	case "transform_field":
+		return bp.transformField(event, data, rule)
+	case "extract_field":
+		return bp.extractField(event, data, rule)
 	case "conditional":
 		return bp.applyConditional(event, data, rule)
 	default:
@@ -247,6 +256,173 @@ func (bp *BuiltinProcessor) renameField(data map[string]interface{}, rule map[st
 	}
 
 	return nil
+}
+
+// transformField transforms an existing field in the data
+func (bp *BuiltinProcessor) transformField(event *types.Event, data map[string]interface{}, rule map[string]interface{}) error {
+	field, ok := rule["field"].(string)
+	if !ok {
+		return fmt.Errorf("transform_field rule missing field")
+	}
+
+	transform, ok := rule["transform"].(string)
+	if !ok {
+		return fmt.Errorf("transform_field rule missing transform")
+	}
+
+	// Get current value from data or event
+	var currentValue string
+	if value, exists := data[field]; exists {
+		currentValue = fmt.Sprintf("%v", value)
+	} else {
+		// Try to get from event headers
+		switch field {
+		case "Event-Name":
+			currentValue = event.Name
+		case "Event-Subclass":
+			currentValue = event.Subclass
+		case "Event-Body":
+			currentValue = event.Body
+		default:
+			currentValue = event.GetHeader(field)
+		}
+	}
+
+	// Apply transformation
+	transformedValue := bp.applyFieldTransform(currentValue, transform)
+
+	// Store transformed value back
+	if transformedValue != nil {
+		data[field] = transformedValue
+	}
+
+	return nil
+}
+
+// extractField extracts a value from event headers/body and creates a new field
+func (bp *BuiltinProcessor) extractField(event *types.Event, data map[string]interface{}, rule map[string]interface{}) error {
+	from, ok := rule["from"].(string)
+	if !ok {
+		return fmt.Errorf("extract_field rule missing from")
+	}
+
+	to, ok := rule["to"].(string)
+	if !ok {
+		return fmt.Errorf("extract_field rule missing to")
+	}
+
+	// Get value from event
+	var value string
+	switch from {
+	case "Event-Name":
+		value = event.Name
+	case "Event-Subclass":
+		value = event.Subclass
+	case "Event-Body":
+		value = event.Body
+	default:
+		value = event.GetHeader(from)
+	}
+
+	// Apply transformation if specified
+	if transform, ok := rule["transform"].(string); ok && transform != "" {
+		transformedValue := bp.applyFieldTransform(value, transform)
+		data[to] = transformedValue
+	} else {
+		// Use default value if original is empty and default is provided
+		if value == "" {
+			if defaultValue, ok := rule["default"].(string); ok {
+				value = defaultValue
+			}
+		}
+		data[to] = value
+	}
+
+	return nil
+}
+
+// applyFieldTransform applies various transformations to a field value
+func (bp *BuiltinProcessor) applyFieldTransform(value, transform string) interface{} {
+	switch transform {
+	case "lowercase":
+		return strings.ToLower(value)
+	case "uppercase":
+		return strings.ToUpper(value)
+	case "trim":
+		return strings.TrimSpace(value)
+	case "reverse":
+		runes := []rune(value)
+		for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+			runes[i], runes[j] = runes[j], runes[i]
+		}
+		return string(runes)
+	case ":int":
+		if intVal, err := strconv.Atoi(value); err == nil {
+			return intVal
+		}
+		bp.logger.Warn("Failed to convert to int", zap.String("value", value))
+		return value
+	case ":float":
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			return floatVal
+		}
+		bp.logger.Warn("Failed to convert to float", zap.String("value", value))
+		return value
+	case ":bool":
+		if boolVal, err := strconv.ParseBool(value); err == nil {
+			return boolVal
+		}
+		bp.logger.Warn("Failed to convert to bool", zap.String("value", value))
+		return value
+	case "url_encode":
+		return url.QueryEscape(value)
+	case "url_decode":
+		if decoded, err := url.QueryUnescape(value); err == nil {
+			return decoded
+		}
+		bp.logger.Warn("Failed to URL decode", zap.String("value", value))
+		return value
+	case "base64_encode":
+		return base64.StdEncoding.EncodeToString([]byte(value))
+	case "base64_decode":
+		if decoded, err := base64.StdEncoding.DecodeString(value); err == nil {
+			return string(decoded)
+		}
+		bp.logger.Warn("Failed to base64 decode", zap.String("value", value))
+		return value
+	case "json_escape":
+		escaped, _ := json.Marshal(value)
+		return string(escaped[1 : len(escaped)-1]) // Remove quotes
+	case "length":
+		return len(value)
+	case "first_word":
+		words := strings.Fields(value)
+		if len(words) > 0 {
+			return words[0]
+		}
+		return ""
+	case "last_word":
+		words := strings.Fields(value)
+		if len(words) > 0 {
+			return words[len(words)-1]
+		}
+		return ""
+	default:
+		// Support regex replacements: "s/pattern/replacement/"
+		if strings.HasPrefix(transform, "s/") && strings.Count(transform, "/") >= 2 {
+			parts := strings.Split(transform[2:], "/")
+			if len(parts) >= 2 {
+				pattern := parts[0]
+				replacement := parts[1]
+				if regex, err := regexp.Compile(pattern); err == nil {
+					return regex.ReplaceAllString(value, replacement)
+				}
+				bp.logger.Warn("Invalid regex pattern", zap.String("pattern", pattern))
+			}
+		}
+		bp.logger.Warn("Unknown transform type", zap.String("transform", transform))
+		return value
+	}
 }
 
 // applyConditional applies conditional logic

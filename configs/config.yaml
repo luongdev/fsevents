@@ -15,31 +15,29 @@ events:
     - "HEARTBEAT"
     - "CUSTOM callcenter::info"
 
-  # Custom processors để modify payload
-  processors:
-    - name: "callcenter_processor"
-      type: "builtin"
-      event_types: ["CUSTOM callcenter::info"]
-      config:
-        rules:
-          - action: "add_field"
-            field: "event_category"
-            value: "custom"
-          - action: "add_field"
-            field: "subclass_info"
-            value: "${header:Event-Subclass}"
-          - action: "conditional"
-            condition:
-              field: "Event-Subclass"
-              operator: "contains"
-              value: "callcenter"
-            then:
-              - action: "add_field"
-                field: "system"
-                value: "callcenter"
-              - action: "add_field"
-                field: "priority"
-                value: "high"
+  event_field_mappings:
+    - event_types: ["CUSTOM callcenter::*"]
+      mappings:
+        - from: "Cc-Action"
+          to: "action"
+          transforms: ["trim"]
+        
+        - from: "Cc-Agent"
+          to: "agent_id"
+          transforms: ["trim"]
+        
+        - from: "Cc-Queue"
+          to: "queue_name"
+          transforms: ["trim"]
+        
+        - from: "Cc-Agent-State"
+          to: "agent_state"
+          transforms: ["url_decode"]
+        
+        - from: "Cc-Agent-Status"
+          to: "agent_status"
+          transforms: ["url_decode"]
+      
 
 # HTTP destinations với selective routing
 http:
@@ -56,7 +54,7 @@ http:
         initial_delay: 2s
         max_delay: 5s
       event_filters:
-        - "CUSTOM callcenter::info"
+        - "CUSTOM callcenter::*"
 
 # Logging
 logging:

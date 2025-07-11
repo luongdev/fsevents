@@ -1,230 +1,244 @@
-# FreeSWITCH ESL Sidecar App Configuration
+# FreeSWITCH ESL Sidecar Configuration Example
 
-# FreeSWITCH ESL Connection
+# ESL connection configuration
 esl:
-  host: "localhost"
+  host: "192.168.13.137"
   port: 8021
   password: "ClueCon"
   timeout: 10s
   reconnect_interval: 5s
-  max_reconnect_attempts: 10
+  max_reconnect_attempts: 3
 
+# Event subscription and processing configuration
 events:
+  # Subscribe to specific events
   subscribe_events:
     - "HEARTBEAT"
+    - "CHANNEL_CREATE"
     - "CUSTOM callcenter::info"
-    - "CUSTOM my-custom-event"
-  
-  # Event filters để filter out events không cần
+
+  # Event filters - chỉ xử lý events thỏa mãn điều kiện
   # filters:
   #   - field: "Event-Name"
-  #     operator: "equals"
-  #     value: "HEARTBEAT"
+  #     operator: "not_equals"
+  #     value: "RE_SCHEDULE"
 
-  # Field mappings - Configure cách map event headers sang output fields  
+  # Global field mappings - áp dụng cho tất cả events
   field_mappings:
-    # Basic event info
     - from: "Event-Name"
       to: "event_type"
-    - from: "Event-Subclass"
-      to: "event_subclass"
+      transforms: ["lowercase"]
     
-    # Call information
-    - from: "Unique-ID"
-      to: "call_id"
-    - from: "Caller-Caller-ID-Number" 
-      to: "caller_number"
-    - from: "Caller-Destination-Number"
-      to: "destination_number"
-    - from: "Call-Direction"
-      to: "direction"
-    - from: "Channel-State"
-      to: "state"
-      transform: "lowercase"
+    - from: "Event-Date-Local"
+      to: "event_time"
+      transforms: ["trim"]
     
-    # System info for HEARTBEAT
-    - from: "Session-Count"
-      to: "session_count"
-      transform: ":int"
-    - from: "Idle-CPU"
-      to: "cpu_idle"
-      transform: ":float"
-    - from: "FreeSWITCH-Uptime-msec"
-      to: "uptime_ms" 
-      transform: ":int"
-    
-    # Custom fields with defaults
-    - from: "variable_sip_user_agent"
-      to: "user_agent"
+    - from: "FreeSWITCH-Hostname"
+      to: "server_name"
+      transforms: ["lowercase", "trim"]
       default_value: "unknown"
-    - from: "variable_bridge_channel"
-      to: "bridge_channel"
-    
-    # CUSTOM event specific fields
-    - from: "Event-Subclass"
-      to: "subclass"
-    - from: "CC-Action"
-      to: "callcenter_action"
-    - from: "CC-Agent"
-      to: "agent_name"
-    - from: "CC-Queue"
-      to: "queue_name"
 
-  # Custom processors để modify payload
-  processors:
-    - name: "call_enricher"
-      type: "builtin"
-      event_types: ["CHANNEL_*"]  # Wildcard matching
-      config:
-        rules:
-          - action: "add_field"
-            field: "call_duration_hint"
-            value: "check bridge time"
-          - action: "conditional"
-            condition:
-              field: "direction"
-              operator: "equals" 
-              value: "inbound"
-            then:
-              - action: "add_field"
-                field: "call_type"
-                value: "incoming"
-            else:
-              - action: "add_field"
-                field: "call_type"
-                value: "outgoing"
-    
-    - name: "heartbeat_processor"
-      type: "builtin" 
-      event_types: ["HEARTBEAT"]
-      config:
-        rules:
-          - action: "add_field"
-            field: "server_status"
-            value: "active"
-          - action: "add_field"
-            field: "processed_at"
-            value: "${header:Event-Date-Local}"
-    
-    - name: "custom_event_processor"
-      type: "builtin"
-      event_types: ["CUSTOM", "CUSTOM *"]  # Handle both CUSTOM and CUSTOM with subclass
-      config:
-        rules:
-          - action: "add_field"
-            field: "event_category"
-            value: "custom"
-          - action: "add_field"
-            field: "subclass_info"
-            value: "${header:Event-Subclass}"
-          - action: "conditional"
-            condition:
-              field: "Event-Subclass"
-              operator: "contains"
-              value: "callcenter"
-            then:
-              - action: "add_field"
-                field: "system"
-                value: "callcenter"
-              - action: "add_field"
-                field: "priority"
-                value: "high"
+  # Event-specific field mappings - chỉ áp dụng cho events cụ thể
+  event_field_mappings:
+    # HEARTBEAT events - System monitoring
+    - event_types: ["HEARTBEAT"]
+      mappings:
+        - from: "Session-Count"
+          to: "active_sessions"
+          transforms: [":int"]
+          default_value: "0"
+        
+        - from: "Idle-Cpu"
+          to: "cpu_idle_percent"
+          transforms: [":float"]
+          default_value: "0.0"
+        
+        - from: "FreeSWITCH-Uptime-msec"
+          to: "uptime_ms"
+          transforms: [":int"]
+        
+        - from: "Up-Time"
+          to: "uptime_readable"
+          transforms: ["trim", "url_decode"]
+        
+        - from: "Session-Since-Startup"
+          to: "total_sessions"
+          transforms: [":int"]
+          default_value: "0"
 
-  # Payload template (optional)
-  # payload_template:
-  #   format: "json"
-  #   template: |
-  #     {
-  #       "metadata": {
-  #         "source": "fsevents",
-  #         "processed_at": "{{.timestamp}}"
-  #       },
-  #       "event": {{.}}
-  #     }
+    # CHANNEL events - Call information
+    - event_types: ["CHANNEL_*"]
+      mappings:
+        - from: "Unique-ID"
+          to: "call_id"
+          transforms: ["trim"]
+        
+        - from: "Caller-Caller-ID-Number"
+          to: "caller_number"
+          transforms: ["trim", "s/[^0-9]//g"]  # Remove non-digits
+          default_value: "unknown"
+        
+        - from: "Caller-Destination-Number"
+          to: "destination_number"
+          transforms: ["trim", "s/[^0-9]//g"]  # Remove non-digits
+          default_value: "unknown"
+        
+        - from: "Call-Direction"
+          to: "direction"
+          transforms: ["lowercase", "trim"]
+        
+        - from: "Channel-State"
+          to: "state"
+          transforms: ["lowercase", "trim"]
+        
+        - from: "Caller-Caller-ID-Name"
+          to: "caller_name"
+          transforms: ["trim", "url_decode"]
+          default_value: "anonymous"
+        
+        - from: "variable_sip_user_agent"
+          to: "user_agent"
+          transforms: ["url_decode", "trim"]
+          default_value: "unknown"
+        
+        # Multiple transforms example - extract domain from caller number
+        - from: "Caller-Caller-ID-Number"
+          to: "caller_domain"
+          transforms: ["trim", "s/.*@//", "lowercase"]  # Extract domain part
+          default_value: "internal"
+
+    # CUSTOM callcenter events - Agent activity
+    - event_types: ["CUSTOM callcenter::*"]
+      mappings:
+        - from: "CC-Action"
+          to: "action"
+          transforms: ["lowercase", "trim"]
+        
+        - from: "CC-Agent"
+          to: "agent_id"
+          transforms: ["uppercase", "trim"]
+        
+        - from: "CC-Queue"
+          to: "queue_name"
+          transforms: ["lowercase", "trim"]
+        
+        - from: "CC-Agent-State"
+          to: "agent_state"
+          transforms: ["uppercase", "trim"]
+        
+        - from: "CC-Agent-Login-Time"
+          to: "login_timestamp"
+          transforms: [":int"]
+        
+        # Transform agent name with multiple operations
+        - from: "CC-Agent-Name"
+          to: "agent_display_name"
+          transforms: ["trim", "url_decode", "first_word", "uppercase"]
+          default_value: "UNKNOWN"
+
+    # CHANNEL_CREATE specific mappings
+    - event_types: ["CHANNEL_CREATE"]
+      mappings:
+        - from: "Channel-Creation-Time"
+          to: "created_at"
+          transforms: [":int"]
+        
+        - from: "variable_sip_call_id"
+          to: "sip_call_id"
+          transforms: ["trim"]
+
+    # CHANNEL_HANGUP specific mappings  
+    - event_types: ["CHANNEL_HANGUP"]
+      mappings:
+        - from: "Hangup-Cause"
+          to: "hangup_reason"
+          transforms: ["lowercase", "trim"]
+        
+        - from: "variable_billsec"
+          to: "call_duration_seconds"
+          transforms: [":int"]
+          default_value: "0"
+        
+        - from: "variable_duration"
+          to: "total_duration_seconds"
+          transforms: [":int"]
+          default_value: "0"
 
 # HTTP destinations với selective routing
 http:
   destinations:
-    # Endpoint cho system events (heartbeat, monitoring)
+    # System monitoring endpoint - chỉ nhận HEARTBEAT events
     - name: "system-monitor"
       url: "https://httpbin.org/post"
       method: "POST"
       headers:
         Content-Type: "application/json"
+        X-Source: "fsevents-system"
+        X-System-ID: "freeswitch-01"
       timeout: 30s
       retry:
         max_attempts: 3
         backoff: "exponential"
         initial_delay: 1s
         max_delay: 30s
-      event_filters:
-        - "HEARTBEAT"
-        - "SYSTEM_*"  # Wildcard cho system events
-    
-    # Endpoint cho call events
+      event_filters: ["HEARTBEAT"]
+
+    # Call tracking endpoint - chỉ nhận CHANNEL events
     - name: "call-tracker"
       url: "https://httpbin.org/post"
       method: "POST"
       headers:
         Content-Type: "application/json"
         X-Source: "fsevents-calls"
-        X-Endpoint: "call-tracker"
-      timeout: 15s
+        X-System-ID: "freeswitch-01"
+      timeout: 30s
       retry:
-        max_attempts: 5
-        backoff: "linear"
-        initial_delay: 500ms
-        max_delay: 10s
-      event_filters:
-        - "CHANNEL_CREATE"
-        - "CHANNEL_DESTROY"
-        - "CHANNEL_ANSWER"
-        - "CHANNEL_HANGUP"
-        - "CHANNEL_*"  # Wildcard cho tất cả channel events
-    
-    # Endpoint cho callcenter events
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+      event_filters: ["CHANNEL_*"]
+
+    # Callcenter analytics - chỉ nhận CUSTOM callcenter events
     - name: "callcenter-analytics"
       url: "https://httpbin.org/post"
       method: "POST"
       headers:
         Content-Type: "application/json"
         X-Source: "fsevents-callcenter"
-        X-Endpoint: "callcenter-analytics"
-      timeout: 20s
+        X-System-ID: "freeswitch-01"
+      timeout: 30s
       retry:
-        max_attempts: 2
-        backoff: "fixed"
-        initial_delay: 2s
-        max_delay: 5s
-      event_filters:
-        - "CUSTOM callcenter::info"
-        - "CUSTOM callcenter::*"  # Tất cả callcenter events
-    
-    # Endpoint nhận tất cả events (backup/audit)
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+      event_filters: ["CUSTOM callcenter::*"]
+
+    # Audit logger - nhận tất cả events
     - name: "audit-logger"
       url: "https://httpbin.org/post"
       method: "POST"
       headers:
         Content-Type: "application/json"
         X-Source: "fsevents-audit"
-        X-Endpoint: "audit-logger"
-      timeout: 45s
+        X-System-ID: "freeswitch-01"
+      timeout: 30s
       retry:
-        max_attempts: 1
-        backoff: "fixed"
-        initial_delay: 1s
-        max_delay: 1s
-      event_filters:
-        - "*"  # Nhận tất cả events
+        max_attempts: 2
+        backoff: "linear"
+        initial_delay: 2s
+        max_delay: 10s
+      event_filters: ["*"]
 
-# Logging
+# Logging configuration
 logging:
-  level: "debug"
-  format: "console"
-  output: "stdout"
+  level: "info"
+  format: "json"
+  output: "console"
 
-# Metrics
+# Metrics configuration
 metrics:
-  enabled: true
-  port: 9090
+  enabled: false
+  port: 8080
   path: "/metrics" 
