@@ -230,7 +230,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("esl.max_reconnect_attempts", 10)
 
 	// Events defaults
-	v.SetDefault("events.subscribe_events", []string{"CHANNEL_CREATE", "CHANNEL_DESTROY"})
+	v.SetDefault("events.subscribe_events", []string{"HEARTBEAT"})
 
 	// HTTP defaults
 	v.SetDefault("http.destinations", []map[string]interface{}{})

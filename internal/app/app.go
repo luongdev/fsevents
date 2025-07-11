@@ -12,17 +12,20 @@ import (
 	"go.uber.org/zap"
 
 	"fsevents/internal/config"
+	"fsevents/internal/esl"
 	"fsevents/internal/logger"
+	"fsevents/pkg/types"
 )
 
 // App represents the main application
 type App struct {
-	config   *config.Config
-	logger   *zap.Logger
-	shutdown chan os.Signal
-	wg       sync.WaitGroup
-	ctx      context.Context
-	cancel   context.CancelFunc
+	config    *config.Config
+	logger    *zap.Logger
+	shutdown  chan os.Signal
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	eslClient *esl.Client
 }
 
 // New creates a new application instance
@@ -46,13 +49,14 @@ func (a *App) Start() error {
 
 	// Setup signal handling for graceful shutdown
 	signal.Notify(a.shutdown, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	a.logger.Info("Signal handling setup complete")
 
 	// Start application components
 	if err := a.startComponents(); err != nil {
 		return fmt.Errorf("failed to start components: %w", err)
 	}
 
-	a.logger.Info("Application started successfully")
+	a.logger.Info("Application started successfully, waiting for signals...")
 
 	// Wait for shutdown signal or context cancellation
 	select {
@@ -71,6 +75,13 @@ func (a *App) Stop() error {
 
 	// Cancel context to signal all components to stop
 	a.cancel()
+
+	// Stop ESL client first
+	if a.eslClient != nil {
+		if err := a.eslClient.Close(); err != nil {
+			a.logger.Error("Error closing ESL client", zap.Error(err))
+		}
+	}
 
 	// Create a timeout context for graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -104,8 +115,15 @@ func (a *App) Stop() error {
 func (a *App) startComponents() error {
 	a.logger.Info("Starting application components")
 
-	// TODO: Start ESL client
-	a.logger.Debug("ESL client component not implemented yet")
+	// Start ESL client
+	if err := a.startESLClient(); err != nil {
+		return fmt.Errorf("failed to start ESL client: %w", err)
+	}
+
+	// Start event processor
+	a.logger.Info("Starting event processor...")
+	a.startEventProcessor()
+	a.logger.Info("Event processor started")
 
 	// TODO: Start HTTP client
 	a.logger.Debug("HTTP client component not implemented yet")
@@ -115,32 +133,86 @@ func (a *App) startComponents() error {
 		a.logger.Debug("Metrics server component not implemented yet")
 	}
 
-	// Demonstrate a background worker
-	a.startDemoWorker()
-
+	a.logger.Info("All components started successfully")
 	return nil
 }
 
-// startDemoWorker starts a demo background worker to show graceful shutdown
-func (a *App) startDemoWorker() {
+// startESLClient starts the ESL client
+func (a *App) startESLClient() error {
+	a.logger.Info("Starting ESL client",
+		zap.String("host", a.config.ESL.Host),
+		zap.Int("port", a.config.ESL.Port),
+	)
+
+	// Create ESL client
+	a.eslClient = esl.NewClient(&a.config.ESL, a.logger)
+
+	// Connect to FreeSWITCH with configured events
+	events := a.config.Events.SubscribeEvents
+	if err := a.eslClient.ConnectWithEvents(events); err != nil {
+		return fmt.Errorf("failed to connect to FreeSWITCH ESL server: %w", err)
+	}
+
+	a.logger.Info("ESL client started successfully")
+	return nil
+}
+
+// startEventProcessor starts processing events from ESL client
+func (a *App) startEventProcessor() {
+	a.logger.Info("Starting event processor")
+
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
 
-		workerLogger := a.logger.With(zap.String("component", "demo-worker"))
-		workerLogger.Info("Demo worker started")
-
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
+		eventChan := a.eslClient.Events()
 
 		for {
 			select {
 			case <-a.ctx.Done():
-				workerLogger.Info("Demo worker shutting down")
+				a.logger.Debug("Event processor shutting down")
 				return
-			case <-ticker.C:
-				workerLogger.Debug("Demo worker heartbeat")
+			case event, ok := <-eventChan:
+				if !ok {
+					a.logger.Debug("Event channel closed, shutting down processor")
+					return
+				}
+				a.processEvent(event)
 			}
 		}
 	}()
+}
+
+// processEvent processes a single event
+func (a *App) processEvent(event *types.Event) {
+	a.logger.Info("Processing event",
+		zap.String("event_name", event.Name),
+		zap.String("event_subclass", event.Subclass),
+		zap.String("unique_id", event.GetHeader("Unique-ID")),
+		zap.String("caller_id_number", event.GetHeader("Caller-Caller-ID-Number")),
+		zap.String("destination_number", event.GetHeader("Caller-Destination-Number")),
+	)
+
+	// TODO: Apply event filters
+	// TODO: Forward to HTTP endpoints
+
+	// For now, just log the event details
+	if event.IsChannelEvent() {
+		if channel := event.GetChannelInfo(); channel != nil {
+			a.logger.Info("Channel event details",
+				zap.String("channel_uuid", channel.UUID),
+				zap.String("direction", channel.Direction),
+				zap.String("state", channel.State),
+				zap.String("caller_id", channel.CallerIDNumber),
+				zap.String("destination", channel.DestinationNumber),
+			)
+		}
+	}
+
+	if event.IsCustomEvent() {
+		a.logger.Info("Custom event received",
+			zap.String("subclass", event.Subclass),
+			zap.Any("headers", event.Headers),
+		)
+	}
 }

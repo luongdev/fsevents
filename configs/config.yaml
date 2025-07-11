@@ -2,7 +2,7 @@
 
 # FreeSWITCH ESL Connection
 esl:
-  host: "localhost"
+  host: "192.168.13.137"
   port: 8021
   password: "ClueCon"
   timeout: 10s
@@ -12,10 +12,8 @@ esl:
 # Event filtering
 events:
   subscribe_events:
-    - CHANNEL_CREATE
-    - CHANNEL_DESTROY
-    - CHANNEL_ANSWER
-    - CHANNEL_HANGUP
+    - "HEARTBEAT"
+    - "CUSTOM callcenter::info"
   filters:
     - field: "Event-Name"
       operator: "equals"
@@ -40,7 +38,7 @@ http:
 # Logging
 logging:
   level: "info"
-  format: "json"
+  format: "console"
   output: "stdout"
 
 # Metrics
