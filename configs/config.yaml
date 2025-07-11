@@ -12,7 +12,6 @@ esl:
 # Event filtering and processing
 events:
   subscribe_events:
-    - "HEARTBEAT"
     - "CUSTOM callcenter::info"
 
   field_mappings:
@@ -57,10 +56,9 @@ events:
         include_body: false
   field_filters:
     include_headers:
-      - "Event-*"        # All Event- headers
-      - "Unique-ID"      # Channel UUID
-      - "Cc-*"           # All callcenter headers
-    # Exclude headers không cần thiết
+      - "Event-*"
+      - "Unique-ID"
+      - "Cc-*"
     exclude_headers:
       - "*-Ipv6"         # IPv6 addresses
       - "*-Switchname"   # Switch internal names
@@ -90,9 +88,3 @@ logging:
   level: "debug"
   format: "console"
   output: "stdout"
-
-# Metrics
-metrics:
-  enabled: true
-  port: 9090
-  path: "/metrics" 
