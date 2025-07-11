@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -40,10 +41,20 @@ func NewClient(destinations []config.HTTPDestination, fieldMapper *processor.Fie
 	}
 }
 
-// ForwardEvent forwards an event to all configured HTTP destinations
+// ForwardEvent forwards an event to configured HTTP destinations based on their event filters
 func (c *Client) ForwardEvent(ctx context.Context, event *types.Event) error {
 	if len(c.destinations) == 0 {
 		c.logger.Debug("No HTTP destinations configured, skipping forward")
+		return nil
+	}
+
+	// Filter destinations that should receive this event
+	eligibleDestinations := c.getEligibleDestinations(event)
+	if len(eligibleDestinations) == 0 {
+		c.logger.Debug("No destinations configured for this event type",
+			zap.String("event_name", event.Name),
+			zap.String("event_subclass", event.Subclass),
+		)
 		return nil
 	}
 
@@ -57,12 +68,13 @@ func (c *Client) ForwardEvent(ctx context.Context, event *types.Event) error {
 	c.logger.Debug("Created HTTP payload",
 		zap.String("event_name", event.Name),
 		zap.String("payload", string(payload)),
+		zap.Int("eligible_destinations", len(eligibleDestinations)),
 	)
 
-	// Forward to all destinations in parallel
-	errChan := make(chan error, len(c.destinations))
+	// Forward to eligible destinations in parallel
+	errChan := make(chan error, len(eligibleDestinations))
 
-	for _, dest := range c.destinations {
+	for _, dest := range eligibleDestinations {
 		go func(destination config.HTTPDestination) {
 			err := c.forwardToDestination(ctx, destination, payload)
 			errChan <- err
@@ -71,7 +83,7 @@ func (c *Client) ForwardEvent(ctx context.Context, event *types.Event) error {
 
 	// Collect results
 	var errors []error
-	for i := 0; i < len(c.destinations); i++ {
+	for i := 0; i < len(eligibleDestinations); i++ {
 		if err := <-errChan; err != nil {
 			errors = append(errors, err)
 		}
@@ -82,6 +94,57 @@ func (c *Client) ForwardEvent(ctx context.Context, event *types.Event) error {
 	}
 
 	return nil
+}
+
+// getEligibleDestinations returns destinations that should receive this event
+func (c *Client) getEligibleDestinations(event *types.Event) []config.HTTPDestination {
+	var eligible []config.HTTPDestination
+
+	// Build event name with subclass for CUSTOM events
+	eventNameWithSubclass := event.Name
+	if event.Name == "CUSTOM" && event.Subclass != "" {
+		eventNameWithSubclass = event.Name + " " + event.Subclass
+	}
+
+	for _, dest := range c.destinations {
+		// If no event filters configured, forward all events
+		if len(dest.EventFilters) == 0 {
+			eligible = append(eligible, dest)
+			continue
+		}
+
+		// Check if this destination should receive this event
+		if c.shouldForwardToDestination(dest, event.Name, eventNameWithSubclass) {
+			eligible = append(eligible, dest)
+		}
+	}
+
+	return eligible
+}
+
+// shouldForwardToDestination checks if a destination should receive an event
+func (c *Client) shouldForwardToDestination(dest config.HTTPDestination, eventName, eventNameWithSubclass string) bool {
+	for _, filter := range dest.EventFilters {
+		// Exact match
+		if filter == eventName || filter == eventNameWithSubclass {
+			return true
+		}
+
+		// Wildcard match
+		if filter == "*" {
+			return true
+		}
+
+		// Prefix wildcard match
+		if strings.HasSuffix(filter, "*") {
+			prefix := strings.TrimSuffix(filter, "*")
+			if strings.HasPrefix(eventName, prefix) || strings.HasPrefix(eventNameWithSubclass, prefix) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // createPayload converts an event to JSON payload using configured mappers and processors

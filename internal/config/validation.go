@@ -268,11 +268,60 @@ func (d *HTTPDestination) Validate() error {
 		return fmt.Errorf("timeout must be positive, got %v", d.Timeout)
 	}
 
+	// Validate event filters
+	for _, filter := range d.EventFilters {
+		if filter == "" {
+			return fmt.Errorf("event filter cannot be empty for destination %s", d.Name)
+		}
+		// Basic validation for event names
+		if !isValidEventFilter(filter) {
+			return fmt.Errorf("invalid event filter '%s' for destination %s", filter, d.Name)
+		}
+	}
+
 	if err := d.Retry.Validate(); err != nil {
 		return fmt.Errorf("retry configuration error: %w", err)
 	}
 
 	return nil
+}
+
+// isValidEventFilter validates event filter format
+func isValidEventFilter(filter string) bool {
+	// Allow wildcard
+	if filter == "*" {
+		return true
+	}
+
+	// Allow prefix wildcard (e.g., "CHANNEL_*")
+	if strings.HasSuffix(filter, "*") {
+		prefix := strings.TrimSuffix(filter, "*")
+		return len(prefix) > 0 && isValidEventName(prefix)
+	}
+
+	// Regular event name validation
+	return isValidEventName(filter)
+}
+
+// isValidEventName validates event name format
+func isValidEventName(name string) bool {
+	// Allow CUSTOM events with subclass
+	if strings.HasPrefix(name, "CUSTOM ") {
+		return len(name) > 7 // "CUSTOM " + subclass
+	}
+
+	// Regular event names should be uppercase and contain only letters, numbers, and underscores
+	if len(name) == 0 {
+		return false
+	}
+
+	for _, char := range name {
+		if !((char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == ':') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Validate validates RetryConfig configuration

@@ -14,102 +14,12 @@ events:
   subscribe_events:
     - "HEARTBEAT"
     - "CUSTOM callcenter::info"
-    - "CUSTOM my-custom-event"
-  
-  # Event filters để filter out events không cần
-  # filters:
-  #   - field: "Event-Name"
-  #     operator: "equals"
-  #     value: "HEARTBEAT"
-
-  # Field mappings - Configure cách map event headers sang output fields  
-  field_mappings:
-    # Basic event info
-    - from: "Event-Name"
-      to: "event_type"
-    - from: "Event-Subclass"
-      to: "event_subclass"
-    
-    # Call information
-    - from: "Unique-ID"
-      to: "call_id"
-    - from: "Caller-Caller-ID-Number" 
-      to: "caller_number"
-    - from: "Caller-Destination-Number"
-      to: "destination_number"
-    - from: "Call-Direction"
-      to: "direction"
-    - from: "Channel-State"
-      to: "state"
-      transform: "lowercase"
-    
-    # System info for HEARTBEAT
-    - from: "Session-Count"
-      to: "session_count"
-      transform: ":int"
-    - from: "Idle-CPU"
-      to: "cpu_idle"
-      transform: ":float"
-    - from: "FreeSWITCH-Uptime-msec"
-      to: "uptime_ms" 
-      transform: ":int"
-    
-    # Custom fields with defaults
-    - from: "variable_sip_user_agent"
-      to: "user_agent"
-      default_value: "unknown"
-    - from: "variable_bridge_channel"
-      to: "bridge_channel"
-    
-    # CUSTOM event specific fields
-    - from: "Event-Subclass"
-      to: "subclass"
-    - from: "CC-Action"
-      to: "callcenter_action"
-    - from: "CC-Agent"
-      to: "agent_name"
-    - from: "CC-Queue"
-      to: "queue_name"
 
   # Custom processors để modify payload
   processors:
-    - name: "call_enricher"
+    - name: "callcenter_processor"
       type: "builtin"
-      event_types: ["CHANNEL_*"]  # Wildcard matching
-      config:
-        rules:
-          - action: "add_field"
-            field: "call_duration_hint"
-            value: "check bridge time"
-          - action: "conditional"
-            condition:
-              field: "direction"
-              operator: "equals" 
-              value: "inbound"
-            then:
-              - action: "add_field"
-                field: "call_type"
-                value: "incoming"
-            else:
-              - action: "add_field"
-                field: "call_type"
-                value: "outgoing"
-    
-    - name: "heartbeat_processor"
-      type: "builtin" 
-      event_types: ["HEARTBEAT"]
-      config:
-        rules:
-          - action: "add_field"
-            field: "server_status"
-            value: "active"
-          - action: "add_field"
-            field: "processed_at"
-            value: "${header:Event-Date-Local}"
-    
-    - name: "custom_event_processor"
-      type: "builtin"
-      event_types: ["CUSTOM", "CUSTOM *"]  # Handle both CUSTOM and CUSTOM with subclass
+      event_types: ["CUSTOM callcenter::info"]
       config:
         rules:
           - action: "add_field"
@@ -131,33 +41,22 @@ events:
                 field: "priority"
                 value: "high"
 
-  # Payload template (optional)
-  # payload_template:
-  #   format: "json"
-  #   template: |
-  #     {
-  #       "metadata": {
-  #         "source": "fsevents",
-  #         "processed_at": "{{.timestamp}}"
-  #       },
-  #       "event": {{.}}
-  #     }
-
-# HTTP destinations
+# HTTP destinations với selective routing
 http:
   destinations:
-    - name: "webhook-test"
+    - name: "asm"
       url: "https://httpbin.org/post"
       method: "POST"
       headers:
         Content-Type: "application/json"
-        X-Source: "fsevents"
-      timeout: 30s
+      timeout: 5s
       retry:
-        max_attempts: 3
-        backoff: "exponential"
-        initial_delay: 1s
-        max_delay: 30s
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      event_filters:
+        - "CUSTOM callcenter::info"
 
 # Logging
 logging:

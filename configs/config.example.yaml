@@ -9,63 +9,219 @@ esl:
   reconnect_interval: 5s
   max_reconnect_attempts: 10
 
-# Event filtering
 events:
   subscribe_events:
-    # - "CUSTOM callcenter::info"
-    # - "CUSTOM sofia::register"
-    # - "CUSTOM my-custom-event"
-    # - "CUSTOM app_notification"
-    # - "CUSTOM conference maintenance"
-  filters:
-    - field: "Event-Name"
-      operator: "equals"
-      value: "CHANNEL_CREATE"
-    - field: "Caller-Destination-Number"
-      operator: "regex"
-      value: "^84[0-9]{9}$"
-    # Filter for CUSTOM events
-    - field: "Event-Subclass"
-      operator: "equals"
-      value: "callcenter::info"
+    - "HEARTBEAT"
+    - "CUSTOM callcenter::info"
+    - "CUSTOM my-custom-event"
+  
+  # Event filters để filter out events không cần
+  # filters:
+  #   - field: "Event-Name"
+  #     operator: "equals"
+  #     value: "HEARTBEAT"
 
-# HTTP destinations
+  # Field mappings - Configure cách map event headers sang output fields  
+  field_mappings:
+    # Basic event info
+    - from: "Event-Name"
+      to: "event_type"
+    - from: "Event-Subclass"
+      to: "event_subclass"
+    
+    # Call information
+    - from: "Unique-ID"
+      to: "call_id"
+    - from: "Caller-Caller-ID-Number" 
+      to: "caller_number"
+    - from: "Caller-Destination-Number"
+      to: "destination_number"
+    - from: "Call-Direction"
+      to: "direction"
+    - from: "Channel-State"
+      to: "state"
+      transform: "lowercase"
+    
+    # System info for HEARTBEAT
+    - from: "Session-Count"
+      to: "session_count"
+      transform: ":int"
+    - from: "Idle-CPU"
+      to: "cpu_idle"
+      transform: ":float"
+    - from: "FreeSWITCH-Uptime-msec"
+      to: "uptime_ms" 
+      transform: ":int"
+    
+    # Custom fields with defaults
+    - from: "variable_sip_user_agent"
+      to: "user_agent"
+      default_value: "unknown"
+    - from: "variable_bridge_channel"
+      to: "bridge_channel"
+    
+    # CUSTOM event specific fields
+    - from: "Event-Subclass"
+      to: "subclass"
+    - from: "CC-Action"
+      to: "callcenter_action"
+    - from: "CC-Agent"
+      to: "agent_name"
+    - from: "CC-Queue"
+      to: "queue_name"
+
+  # Custom processors để modify payload
+  processors:
+    - name: "call_enricher"
+      type: "builtin"
+      event_types: ["CHANNEL_*"]  # Wildcard matching
+      config:
+        rules:
+          - action: "add_field"
+            field: "call_duration_hint"
+            value: "check bridge time"
+          - action: "conditional"
+            condition:
+              field: "direction"
+              operator: "equals" 
+              value: "inbound"
+            then:
+              - action: "add_field"
+                field: "call_type"
+                value: "incoming"
+            else:
+              - action: "add_field"
+                field: "call_type"
+                value: "outgoing"
+    
+    - name: "heartbeat_processor"
+      type: "builtin" 
+      event_types: ["HEARTBEAT"]
+      config:
+        rules:
+          - action: "add_field"
+            field: "server_status"
+            value: "active"
+          - action: "add_field"
+            field: "processed_at"
+            value: "${header:Event-Date-Local}"
+    
+    - name: "custom_event_processor"
+      type: "builtin"
+      event_types: ["CUSTOM", "CUSTOM *"]  # Handle both CUSTOM and CUSTOM with subclass
+      config:
+        rules:
+          - action: "add_field"
+            field: "event_category"
+            value: "custom"
+          - action: "add_field"
+            field: "subclass_info"
+            value: "${header:Event-Subclass}"
+          - action: "conditional"
+            condition:
+              field: "Event-Subclass"
+              operator: "contains"
+              value: "callcenter"
+            then:
+              - action: "add_field"
+                field: "system"
+                value: "callcenter"
+              - action: "add_field"
+                field: "priority"
+                value: "high"
+
+  # Payload template (optional)
+  # payload_template:
+  #   format: "json"
+  #   template: |
+  #     {
+  #       "metadata": {
+  #         "source": "fsevents",
+  #         "processed_at": "{{.timestamp}}"
+  #       },
+  #       "event": {{.}}
+  #     }
+
+# HTTP destinations với selective routing
 http:
   destinations:
-    - name: "webhook1"
-      url: "https://api.example.com/webhook"
+    # Endpoint cho system events (heartbeat, monitoring)
+    - name: "system-monitor"
+      url: "https://httpbin.org/post"
       method: "POST"
       headers:
         Content-Type: "application/json"
-        Authorization: "Bearer token"
       timeout: 30s
       retry:
         max_attempts: 3
         backoff: "exponential"
         initial_delay: 1s
         max_delay: 30s
+      event_filters:
+        - "HEARTBEAT"
+        - "SYSTEM_*"  # Wildcard cho system events
+    
+    # Endpoint cho call events
+    - name: "call-tracker"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-calls"
+        X-Endpoint: "call-tracker"
+      timeout: 15s
+      retry:
+        max_attempts: 5
+        backoff: "linear"
+        initial_delay: 500ms
+        max_delay: 10s
+      event_filters:
+        - "CHANNEL_CREATE"
+        - "CHANNEL_DESTROY"
+        - "CHANNEL_ANSWER"
+        - "CHANNEL_HANGUP"
+        - "CHANNEL_*"  # Wildcard cho tất cả channel events
+    
+    # Endpoint cho callcenter events
+    - name: "callcenter-analytics"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-callcenter"
+        X-Endpoint: "callcenter-analytics"
+      timeout: 20s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      event_filters:
+        - "CUSTOM callcenter::info"
+        - "CUSTOM callcenter::*"  # Tất cả callcenter events
+    
+    # Endpoint nhận tất cả events (backup/audit)
+    - name: "audit-logger"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-audit"
+        X-Endpoint: "audit-logger"
+      timeout: 45s
+      retry:
+        max_attempts: 1
+        backoff: "fixed"
+        initial_delay: 1s
+        max_delay: 1s
+      event_filters:
+        - "*"  # Nhận tất cả events
 
-# Logging configuration
-# level: debug, info, warn, error, fatal, panic
-# format: json, console
-# output: stdout, stderr, or file path
+# Logging
 logging:
-  level: "info"
-  format: "json"
+  level: "debug"
+  format: "console"
   output: "stdout"
-
-# Alternative logging examples:
-# For development with colored console output:
-# logging:
-#   level: "debug"
-#   format: "console"
-#   output: "stdout"
-
-# For production with file output:
-# logging:
-#   level: "info"
-#   format: "json"
-#   output: "/var/log/fsevents/app.log"
 
 # Metrics
 metrics:
