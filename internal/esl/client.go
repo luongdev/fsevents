@@ -232,7 +232,16 @@ func (c *Client) IsConnected() bool {
 func (c *Client) GetStats() ConnectionStats {
 	c.stats.mu.RLock()
 	defer c.stats.mu.RUnlock()
-	return *c.stats
+
+	// Copy individual fields to avoid copying the mutex
+	return ConnectionStats{
+		ConnectedAt:       c.stats.ConnectedAt,
+		EventsReceived:    c.stats.EventsReceived,
+		EventsProcessed:   c.stats.EventsProcessed,
+		ReconnectAttempts: c.stats.ReconnectAttempts,
+		LastError:         c.stats.LastError,
+		// Don't copy the mutex
+	}
 }
 
 // handleDisconnect handles ESL disconnection
