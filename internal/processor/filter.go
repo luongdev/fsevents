@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
@@ -80,12 +81,25 @@ func (f *EventFilter) evaluateFilter(event *types.Event, filter config.FilterRul
 	case "ends_with":
 		return strings.HasSuffix(actualValue, filter.Value)
 	case "regex":
-		// TODO: Implement regex matching if needed
-		f.logger.Warn("Regex operator not implemented yet",
+		// Compile and match regex pattern
+		regex, err := regexp.Compile(filter.Value)
+		if err != nil {
+			f.logger.Error("Invalid regex pattern",
+				zap.String("field", filter.Field),
+				zap.String("pattern", filter.Value),
+				zap.Error(err),
+			)
+			return false
+		}
+
+		matched := regex.MatchString(actualValue)
+		f.logger.Debug("Regex filter evaluation",
 			zap.String("field", filter.Field),
-			zap.String("value", filter.Value),
+			zap.String("pattern", filter.Value),
+			zap.String("actual_value", actualValue),
+			zap.Bool("matched", matched),
 		)
-		return false
+		return matched
 	default:
 		f.logger.Warn("Unknown filter operator",
 			zap.String("operator", filter.Operator),

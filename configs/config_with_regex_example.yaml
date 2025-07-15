@@ -1,0 +1,91 @@
+# FreeSWITCH ESL Sidecar Configuration with Regex Filter Examples
+
+# ESL connection configuration
+esl:
+  host: "192.168.13.137"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 3
+
+# Event subscription and processing configuration
+events:
+  # Subscribe to specific events
+  subscribe_events:
+    - "HEARTBEAT"
+    - "CHANNEL_CREATE"
+    - "CHANNEL_HANGUP"
+    - "CUSTOM callcenter::info"
+
+  # Event filters with regex examples
+  filters:
+    # Only process events where Caller-ID-Number matches specific patterns
+    - field: "Caller-Caller-ID-Number"
+      operator: "regex"
+      value: "^\\+?1?[2-9]\\d{2}[2-9]\\d{2}\\d{4}$"  # US phone number format
+    
+    # Filter events by Call-Direction using regex
+    - field: "Call-Direction"
+      operator: "regex"
+      value: "^(inbound|outbound)$"  # Only inbound or outbound calls
+    
+    # Filter out specific user agents using regex (match bots to exclude them)
+    - field: "variable_sip_user_agent"
+      operator: "regex"
+      value: "(?i)bot|scanner|crawler|attack"  # Case-insensitive match for bad user agents
+    
+    # Only process events with valid UUID format
+    - field: "Unique-ID"
+      operator: "regex"
+      value: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+
+  # Global field mappings
+  field_mappings:
+    - from: "Event-Name"
+      to: "event_type"
+      transforms: ["lowercase"]
+    
+    - from: "Event-Date-Local"
+      to: "event_time"
+      transforms: ["trim"]
+    
+    - from: "Caller-Caller-ID-Number"
+      to: "caller_number"
+      transforms: ["trim"]
+    
+    - from: "Caller-Destination-Number"
+      to: "destination_number"
+      transforms: ["trim"]
+    
+    - from: "Call-Direction"
+      to: "direction"
+      transforms: ["lowercase", "trim"]
+
+# HTTP destinations
+http:
+  destinations:
+    - name: "filtered-events"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-regex-filtered"
+      timeout: 30s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+
+# Logging configuration
+logging:
+  level: "debug"  # Set to debug to see regex evaluation logs
+  format: "json"
+  output: "console"
+
+# Metrics configuration
+metrics:
+  enabled: false
+  port: 8080
+  path: "/metrics" 

@@ -48,12 +48,5 @@ RUN mkdir -p logs && chown -R fsevents:fsevents /app
 # Switch to non-root user
 USER fsevents
 
-# Expose metrics port (if enabled)
-EXPOSE 9090
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:9090/metrics || exit 1
-
 # Default command
 CMD ["./fsevents", "--config", "configs/config.yaml"] 

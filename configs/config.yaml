@@ -11,6 +11,11 @@ esl:
 
 # Event filtering and processing
 events:
+  filters:
+    - field: "CC-Action"
+      operator: "regex"
+      value: "^(agent-)(status|state)(-change)$"
+
   subscribe_events:
     - "CUSTOM callcenter::info"
 
