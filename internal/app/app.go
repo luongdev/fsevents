@@ -122,7 +122,7 @@ func (a *App) startComponents() error {
 	a.logger.Info("Starting application components")
 
 	// Initialize event filter
-	a.eventFilter = processor.NewEventFilter(a.config.Events.Filters, a.logger)
+	a.eventFilter = processor.NewEventFilter(a.config.Events.Filters, a.config.Events.FilterLogic, a.logger)
 	a.logger.Info("Event filter initialized",
 		zap.Int("filter_count", a.eventFilter.GetFilterCount()))
 

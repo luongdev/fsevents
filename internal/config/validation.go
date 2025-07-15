@@ -168,6 +168,11 @@ func (e *EventsConfig) Validate() error {
 		}
 	}
 
+	// Validate filter logic
+	if e.FilterLogic != "" && e.FilterLogic != "AND" && e.FilterLogic != "OR" {
+		return fmt.Errorf("filter_logic must be 'AND' or 'OR', got: %s", e.FilterLogic)
+	}
+
 	// Validate filters
 	for i, filter := range e.Filters {
 		if err := filter.Validate(); err != nil {

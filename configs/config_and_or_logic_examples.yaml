@@ -1,0 +1,206 @@
+# FreeSWITCH ESL Sidecar Configuration - AND/OR Filter Logic Examples
+
+# ESL connection configuration
+esl:
+  host: "192.168.13.137"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 3
+
+# === EXAMPLE 1: AND Logic (Default) ===
+# Process events that match ALL filter conditions
+events_and_example:
+  subscribe_events:
+    - "CUSTOM callcenter::info"
+    - "CHANNEL_CREATE"
+    - "CHANNEL_HANGUP"
+
+  # Default filter logic is "AND" - event must match ALL filters
+  filter_logic: "AND"  # Optional - this is the default
+  
+  filters:
+    # Filter 1: Only callcenter agent events
+    - field: "CC-Action"
+      operator: "regex"
+      value: "^(agent-)(status|state)(-change)$"
+    
+    # Filter 2: Only events where agent state is not Unknown
+    - field: "CC-Agent-State"
+      operator: "not_equals"
+      value: "Unknown"
+      
+    # Filter 3: Only events for specific queue (optional)
+    - field: "CC-Queue"
+      operator: "contains"
+      value: "support"
+
+  # With AND logic: Events must match ALL 3 filters above
+  # ✅ Pass: CC-Action="agent-status-change" AND CC-Agent-State="Available" AND CC-Queue="support-queue"
+  # ❌ Fail: CC-Action="agent-status-change" AND CC-Agent-State="Unknown" AND CC-Queue="support-queue"
+  # ❌ Fail: CC-Action="agent-login" AND CC-Agent-State="Available" AND CC-Queue="support-queue"
+
+# === EXAMPLE 2: OR Logic ===
+# Process events that match ANY filter condition
+events_or_example:
+  subscribe_events:
+    - "CUSTOM callcenter::info"
+    - "HEARTBEAT"
+    - "CHANNEL_CREATE"
+
+  # OR logic - event passes if it matches ANY filter
+  filter_logic: "OR"
+  
+  filters:
+    # Filter 1: Accept callcenter agent events
+    - field: "CC-Action"
+      operator: "regex"
+      value: "^(agent-)(status|state)(-change)$"
+    
+    # Filter 2: Accept system heartbeat events
+    - field: "Event-Name"
+      operator: "equals"
+      value: "HEARTBEAT"
+      
+    # Filter 3: Accept inbound calls only
+    - field: "Call-Direction"
+      operator: "equals"
+      value: "inbound"
+
+  # With OR logic: Events pass if they match ANY filter above
+  # ✅ Pass: CC-Action="agent-status-change" (matches filter 1)
+  # ✅ Pass: Event-Name="HEARTBEAT" (matches filter 2)
+  # ✅ Pass: Call-Direction="inbound" (matches filter 3)
+  # ✅ Pass: Event that matches multiple filters
+  # ❌ Fail: Event that matches none of the filters
+
+# === EXAMPLE 3: Complex Real-World Scenarios ===
+
+# Scenario A: Monitor Critical Events (OR Logic)
+critical_events:
+  subscribe_events:
+    - "CUSTOM callcenter::info"
+    - "CHANNEL_HANGUP"
+    - "HEARTBEAT"
+
+  filter_logic: "OR"
+  
+  filters:
+    # Critical agent events
+    - field: "CC-Action" 
+      operator: "regex"
+      value: "^(agent-)(logout|state-change)$"
+    
+    # Failed calls
+    - field: "Hangup-Cause"
+      operator: "regex"
+      value: "^(USER_BUSY|NO_ANSWER|CALL_REJECTED)$"
+    
+    # System health issues
+    - field: "Session-Count"
+      operator: "greater_than"
+      value: "1000"
+
+# Scenario B: Quality Assurance Monitoring (AND Logic)
+quality_monitoring:
+  subscribe_events:
+    - "CHANNEL_HANGUP"
+    - "CUSTOM callcenter::info"
+
+  filter_logic: "AND"
+  
+  filters:
+    # Only completed calls
+    - field: "Hangup-Cause"
+      operator: "equals"
+      value: "NORMAL_CLEARING"
+    
+    # Only calls longer than 30 seconds
+    - field: "variable_billsec"
+      operator: "greater_than"
+      value: "30"
+    
+    # Only calls from specific agents
+    - field: "CC-Agent"
+      operator: "regex"
+      value: "^(qa-agent|supervisor-).*"
+
+# === CONFIGURATION TEMPLATE ===
+# Copy and modify this template for your use case
+
+events:
+  subscribe_events:
+    - "CUSTOM callcenter::info"  # Your events here
+
+  # Choose your filter logic
+  filter_logic: "AND"  # or "OR" - defaults to "AND" if not specified
+  
+  filters:
+    # Add your filter rules here
+    - field: "your-field-name"
+      operator: "equals"        # equals, not_equals, contains, starts_with, ends_with, regex, greater_than, less_than
+      value: "your-value"
+    
+    # Add more filters as needed
+    # - field: "another-field"
+    #   operator: "regex"
+    #   value: "your-pattern"
+
+  # Global field mappings
+  field_mappings:
+    - from: "Event-Date-Timestamp"
+      to: "timestamp"
+      transforms: [":int", ":divide:1000", ":round"]
+
+  # Event-specific field mappings
+  event_field_mappings:
+    - event_types: ["CUSTOM callcenter::*"]
+      mappings:
+        - from: "CC-Action"
+          to: "action"
+          transforms: ["trim"]
+        
+        - from: "CC-Agent"
+          to: "agent_id"
+          transforms: ["trim"]
+        
+        - from: "CC-Agent-State"
+          to: "agent_state"
+          transforms: ["url_decode"]
+
+      field_filters:
+        include_fields:
+          - "timestamp"
+          - "action"
+          - "agent_id" 
+          - "agent_state"
+        include_body: false
+
+# HTTP destinations
+http:
+  destinations:
+    - name: "webhook_endpoint"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Filter-Logic: "AND"  # Document which logic was used
+      timeout: 30s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+
+# Logging
+logging:
+  level: "debug"  # Use debug to see filter evaluation logs
+  format: "console"
+  output: "stdout"
+
+# Metrics
+metrics:
+  enabled: false
+  port: 8080
+  path: "/metrics" 

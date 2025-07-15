@@ -11,6 +11,10 @@ esl:
 
 # Event filtering and processing
 events:
+  # Use OR logic if you want to match multiple different CC-Action patterns
+  # Use AND logic if you want ALL filters to match (default)
+  filter_logic: "AND"  # Change to "OR" if needed
+  
   filters:
     - field: "CC-Action"
       operator: "regex"

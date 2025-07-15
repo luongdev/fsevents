@@ -12,15 +12,22 @@ import (
 
 // EventFilter handles filtering of events based on configuration rules
 type EventFilter struct {
-	filters []config.FilterRule
-	logger  *zap.Logger
+	filters     []config.FilterRule
+	filterLogic string // "AND" or "OR"
+	logger      *zap.Logger
 }
 
-// NewEventFilter creates a new event filter with the given rules
-func NewEventFilter(filters []config.FilterRule, logger *zap.Logger) *EventFilter {
+// NewEventFilter creates a new event filter with the given rules and logic
+func NewEventFilter(filters []config.FilterRule, filterLogic string, logger *zap.Logger) *EventFilter {
+	// Default to AND logic if not specified
+	if filterLogic == "" {
+		filterLogic = "AND"
+	}
+
 	return &EventFilter{
-		filters: filters,
-		logger:  logger.Named("filter"),
+		filters:     filters,
+		filterLogic: filterLogic,
+		logger:      logger.Named("filter"),
 	}
 }
 
@@ -31,24 +38,52 @@ func (f *EventFilter) ShouldProcess(event *types.Event) bool {
 		return true
 	}
 
-	// Apply all filter rules - event must match ALL rules (AND logic)
-	for _, filter := range f.filters {
-		if !f.evaluateFilter(event, filter) {
-			f.logger.Debug("Event filtered out",
-				zap.String("event_name", event.Name),
-				zap.String("filter_field", filter.Field),
-				zap.String("filter_operator", filter.Operator),
-				zap.String("filter_value", filter.Value),
-			)
-			return false
-		}
-	}
-
-	f.logger.Debug("Event passed all filters",
+	f.logger.Debug("Evaluating filters",
 		zap.String("event_name", event.Name),
 		zap.Int("filter_count", len(f.filters)),
+		zap.String("filter_logic", f.filterLogic),
 	)
-	return true
+
+	// Apply filter rules based on logic type
+	if f.filterLogic == "OR" {
+		// OR logic: event passes if ANY filter matches
+		for _, filter := range f.filters {
+			if f.evaluateFilter(event, filter) {
+				f.logger.Debug("Event passed OR filter",
+					zap.String("event_name", event.Name),
+					zap.String("filter_field", filter.Field),
+					zap.String("filter_operator", filter.Operator),
+					zap.String("filter_value", filter.Value),
+				)
+				return true
+			}
+		}
+
+		f.logger.Debug("Event filtered out by OR logic - no filters matched",
+			zap.String("event_name", event.Name),
+			zap.Int("filter_count", len(f.filters)),
+		)
+		return false
+	} else {
+		// AND logic: event passes only if ALL filters match
+		for _, filter := range f.filters {
+			if !f.evaluateFilter(event, filter) {
+				f.logger.Debug("Event filtered out by AND logic",
+					zap.String("event_name", event.Name),
+					zap.String("filter_field", filter.Field),
+					zap.String("filter_operator", filter.Operator),
+					zap.String("filter_value", filter.Value),
+				)
+				return false
+			}
+		}
+
+		f.logger.Debug("Event passed all AND filters",
+			zap.String("event_name", event.Name),
+			zap.Int("filter_count", len(f.filters)),
+		)
+		return true
+	}
 }
 
 // evaluateFilter evaluates a single filter rule against an event

@@ -72,6 +72,7 @@ type PayloadTemplate struct {
 type EventsConfig struct {
 	SubscribeEvents    []string             `mapstructure:"subscribe_events" yaml:"subscribe_events"`
 	Filters            []FilterRule         `mapstructure:"filters" yaml:"filters"`
+	FilterLogic        string               `mapstructure:"filter_logic" yaml:"filter_logic"`                 // "AND" or "OR" - default is "AND"
 	FieldMappings      []FieldMapping       `mapstructure:"field_mappings" yaml:"field_mappings"`             // Global field mappings
 	EventFieldMappings []EventFieldMappings `mapstructure:"event_field_mappings" yaml:"event_field_mappings"` // Event-specific field mappings
 	FieldFilters       *FieldFilter         `mapstructure:"field_filters" yaml:"field_filters"`               // Global field filtering rules
@@ -277,6 +278,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Events defaults
 	v.SetDefault("events.subscribe_events", []string{"HEARTBEAT"})
+	v.SetDefault("events.filter_logic", "AND")
 
 	// HTTP defaults
 	v.SetDefault("http.destinations", []map[string]interface{}{})
@@ -306,6 +308,7 @@ func configToMap(c *Config) map[string]interface{} {
 		"events": map[string]interface{}{
 			"subscribe_events": c.Events.SubscribeEvents,
 			"filters":          c.Events.Filters,
+			"filter_logic":     c.Events.FilterLogic,
 			"field_mappings":   c.Events.FieldMappings,
 			"processors":       c.Events.Processors,
 			"payload_template": c.Events.PayloadTemplate,
