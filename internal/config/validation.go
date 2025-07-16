@@ -1,11 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"text/template"
+	"time"
 )
 
 // Validate validates the entire configuration
@@ -308,6 +311,13 @@ func (d *HTTPDestination) Validate() error {
 
 	if err := d.Retry.Validate(); err != nil {
 		return fmt.Errorf("retry configuration error: %w", err)
+	}
+
+	// Validate payload template if provided
+	if d.PayloadTemplate != nil {
+		if err := d.PayloadTemplate.Validate(); err != nil {
+			return fmt.Errorf("payload template error: %w", err)
+		}
 	}
 
 	return nil
@@ -620,4 +630,139 @@ func validateMathTransform(transform string) error {
 	}
 
 	return nil
+}
+
+// Validate validates PayloadTemplate configuration
+func (p *PayloadTemplate) Validate() error {
+	if p == nil {
+		return nil
+	}
+
+	// Validate format
+	validFormats := map[string]bool{
+		"json": true,
+		"xml":  true,
+		"form": true,
+		"":     true, // Default to json
+	}
+
+	if !validFormats[p.Format] {
+		return fmt.Errorf("invalid payload format: %s (supported: json, xml, form)", p.Format)
+	}
+
+	// Validate template syntax if provided
+	if p.Template != "" {
+		// Parse the template string with custom functions
+		tmpl := template.New("payload_template").Funcs(getTemplateFunctions())
+		_, err := tmpl.Parse(p.Template)
+		if err != nil {
+			return fmt.Errorf("invalid template syntax: %w", err)
+		}
+	}
+
+	// Validate headers
+	for key, value := range p.Headers {
+		if key == "" {
+			return fmt.Errorf("header key cannot be empty")
+		}
+		if value == "" {
+			return fmt.Errorf("header value cannot be empty for key: %s", key)
+		}
+	}
+
+	return nil
+}
+
+// getTemplateFunctions returns custom functions for Go template validation
+func getTemplateFunctions() template.FuncMap {
+	return template.FuncMap{
+		// Date/time functions
+		"now": func() time.Time {
+			return time.Now()
+		},
+		"formatTime": func(layout string, t time.Time) string {
+			return t.Format(layout)
+		},
+		"formatTimeRFC3339": func(t time.Time) string {
+			return t.Format(time.RFC3339)
+		},
+		"formatTimeUnix": func(t time.Time) int64 {
+			return t.Unix()
+		},
+		"formatTimeUnixMilli": func(t time.Time) int64 {
+			return t.UnixMilli()
+		},
+
+		// JSON functions
+		"toJSON": func(v interface{}) (string, error) {
+			bytes, err := json.Marshal(v)
+			if err != nil {
+				return "", err
+			}
+			return string(bytes), nil
+		},
+		"toJSONPretty": func(v interface{}) (string, error) {
+			bytes, err := json.MarshalIndent(v, "", "  ")
+			if err != nil {
+				return "", err
+			}
+			return string(bytes), nil
+		},
+
+		// String functions
+		"upper": func(s string) string {
+			return strings.ToUpper(s)
+		},
+		"lower": func(s string) string {
+			return strings.ToLower(s)
+		},
+		"trim": func(s string) string {
+			return strings.TrimSpace(s)
+		},
+		"replace": func(old, new, s string) string {
+			return strings.ReplaceAll(s, old, new)
+		},
+		"contains": func(substr, s string) bool {
+			return strings.Contains(s, substr)
+		},
+		"hasPrefix": func(prefix, s string) bool {
+			return strings.HasPrefix(s, prefix)
+		},
+		"hasSuffix": func(suffix, s string) bool {
+			return strings.HasSuffix(s, suffix)
+		},
+
+		// Default value function
+		"default": func(defaultVal, val interface{}) interface{} {
+			if val == nil || val == "" {
+				return defaultVal
+			}
+			return val
+		},
+
+		// Conditional functions
+		"if": func(condition bool, trueVal, falseVal interface{}) interface{} {
+			if condition {
+				return trueVal
+			}
+			return falseVal
+		},
+
+		// Math functions
+		"add": func(a, b int) int {
+			return a + b
+		},
+		"subtract": func(a, b int) int {
+			return a - b
+		},
+		"multiply": func(a, b int) int {
+			return a * b
+		},
+		"divide": func(a, b int) int {
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
+	}
 }

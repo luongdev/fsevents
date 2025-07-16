@@ -141,7 +141,7 @@ func (a *App) startComponents() error {
 		zap.Int("processor_count", a.processorManager.GetProcessorCount()))
 
 	// Initialize HTTP client
-	a.httpClient = http.NewClient(a.config.HTTP.Destinations, a.fieldMapper, a.processorManager, a.config.Events.PayloadTemplate, a.logger)
+	a.httpClient = http.NewClient(a.config.HTTP.Destinations, a.fieldMapper, a.processorManager, a.logger)
 	a.logger.Info("HTTP client initialized",
 		zap.Int("destination_count", a.httpClient.GetDestinationCount()))
 

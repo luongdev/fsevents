@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"text/template"
 	"time"
 
 	"go.uber.org/zap"
@@ -23,17 +24,15 @@ type Client struct {
 	httpClient       *http.Client
 	fieldMapper      *processor.FieldMapper
 	processorManager *processor.ProcessorManager
-	payloadTemplate  *config.PayloadTemplate
 	logger           *zap.Logger
 }
 
 // NewClient creates a new HTTP client with the given destinations and processors
-func NewClient(destinations []config.HTTPDestination, fieldMapper *processor.FieldMapper, processorManager *processor.ProcessorManager, payloadTemplate *config.PayloadTemplate, logger *zap.Logger) *Client {
+func NewClient(destinations []config.HTTPDestination, fieldMapper *processor.FieldMapper, processorManager *processor.ProcessorManager, logger *zap.Logger) *Client {
 	return &Client{
 		destinations:     destinations,
 		fieldMapper:      fieldMapper,
 		processorManager: processorManager,
-		payloadTemplate:  payloadTemplate,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second, // Default timeout, can be overridden per destination
 		},
@@ -58,25 +57,26 @@ func (c *Client) ForwardEvent(ctx context.Context, event *types.Event) error {
 		return nil
 	}
 
-	// Convert event to JSON payload
-	payload, err := c.createPayload(event)
-	if err != nil {
-		return fmt.Errorf("failed to create payload: %w", err)
-	}
-
-	// Log payload for debugging
-	c.logger.Debug("Created HTTP payload",
-		zap.String("event_name", event.Name),
-		zap.String("payload", string(payload)),
-		zap.Int("eligible_destinations", len(eligibleDestinations)),
-	)
-
 	// Forward to eligible destinations in parallel
 	errChan := make(chan error, len(eligibleDestinations))
 
 	for _, dest := range eligibleDestinations {
 		go func(destination config.HTTPDestination) {
-			err := c.forwardToDestination(ctx, destination, payload)
+			// Create payload specific to this destination
+			payload, err := c.createPayload(event, destination)
+			if err != nil {
+				errChan <- fmt.Errorf("failed to create payload for destination %s: %w", destination.Name, err)
+				return
+			}
+
+			// Log payload for debugging
+			c.logger.Debug("Created HTTP payload",
+				zap.String("destination", destination.Name),
+				zap.String("event_name", event.Name),
+				zap.String("payload", string(payload)),
+			)
+
+			err = c.forwardToDestination(ctx, destination, payload)
 			errChan <- err
 		}(dest)
 	}
@@ -148,7 +148,7 @@ func (c *Client) shouldForwardToDestination(dest config.HTTPDestination, eventNa
 }
 
 // createPayload converts an event to JSON payload using configured mappers and processors
-func (c *Client) createPayload(event *types.Event) ([]byte, error) {
+func (c *Client) createPayload(event *types.Event, dest config.HTTPDestination) ([]byte, error) {
 	// Start with field mapping
 	payload := c.fieldMapper.MapEvent(event)
 
@@ -160,8 +160,8 @@ func (c *Client) createPayload(event *types.Event) ([]byte, error) {
 	}
 
 	// Apply payload template if configured
-	if c.payloadTemplate != nil {
-		return c.applyTemplate(payload)
+	if dest.PayloadTemplate != nil {
+		return c.applyTemplate(payload, dest.PayloadTemplate)
 	}
 
 	// Default to JSON
@@ -169,25 +169,168 @@ func (c *Client) createPayload(event *types.Event) ([]byte, error) {
 }
 
 // applyTemplate applies the configured payload template
-func (c *Client) applyTemplate(data map[string]interface{}) ([]byte, error) {
-	switch c.payloadTemplate.Format {
+func (c *Client) applyTemplate(data map[string]interface{}, template *config.PayloadTemplate) ([]byte, error) {
+	// Add template headers to payload metadata if they exist
+	if len(template.Headers) > 0 {
+		metadata := make(map[string]interface{})
+		if existing, ok := data["metadata"]; ok {
+			if existingMap, ok := existing.(map[string]interface{}); ok {
+				metadata = existingMap
+			}
+		}
+
+		// Add template headers to metadata
+		templateHeaders := make(map[string]string)
+		for key, value := range template.Headers {
+			templateHeaders[key] = value
+		}
+		metadata["template_headers"] = templateHeaders
+		data["metadata"] = metadata
+	}
+
+	switch template.Format {
 	case "json", "":
-		if c.payloadTemplate.Template != "" {
-			// TODO: Implement Go template processing
-			c.logger.Warn("Custom JSON templates not yet implemented, using default")
+		if template.Template != "" {
+			// Process Go template
+			return c.processGoTemplate(data, template.Template)
 		}
 		return json.Marshal(data)
 	case "xml":
+		if template.Template != "" {
+			// Process Go template for XML
+			return c.processGoTemplate(data, template.Template)
+		}
 		// TODO: Implement XML formatting
 		c.logger.Warn("XML format not yet implemented, using JSON")
 		return json.Marshal(data)
 	case "form":
+		if template.Template != "" {
+			// Process Go template for Form
+			return c.processGoTemplate(data, template.Template)
+		}
 		// TODO: Implement form data formatting
 		c.logger.Warn("Form format not yet implemented, using JSON")
 		return json.Marshal(data)
 	default:
-		c.logger.Warn("Unknown payload format, using JSON", zap.String("format", c.payloadTemplate.Format))
+		c.logger.Warn("Unknown payload format, using JSON", zap.String("format", template.Format))
 		return json.Marshal(data)
+	}
+}
+
+// processGoTemplate processes a Go template with the given data
+func (c *Client) processGoTemplate(data map[string]interface{}, templateStr string) ([]byte, error) {
+	// Create template with custom functions
+	tmpl, err := template.New("payload").Funcs(c.getTemplateFunctions()).Parse(templateStr)
+	if err != nil {
+		c.logger.Error("Failed to parse template", zap.Error(err))
+		return nil, fmt.Errorf("template parsing error: %w", err)
+	}
+
+	// Execute template
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		c.logger.Error("Failed to execute template", zap.Error(err))
+		return nil, fmt.Errorf("template execution error: %w", err)
+	}
+
+	c.logger.Debug("Template processed successfully",
+		zap.String("template", templateStr),
+		zap.String("result", buf.String()))
+
+	return buf.Bytes(), nil
+}
+
+// getTemplateFunctions returns custom functions for Go templates
+func (c *Client) getTemplateFunctions() template.FuncMap {
+	return template.FuncMap{
+		// Date/time functions
+		"now": func() time.Time {
+			return time.Now()
+		},
+		"formatTime": func(layout string, t time.Time) string {
+			return t.Format(layout)
+		},
+		"formatTimeRFC3339": func(t time.Time) string {
+			return t.Format(time.RFC3339)
+		},
+		"formatTimeUnix": func(t time.Time) int64 {
+			return t.Unix()
+		},
+		"formatTimeUnixMilli": func(t time.Time) int64 {
+			return t.UnixMilli()
+		},
+
+		// JSON functions
+		"toJSON": func(v interface{}) (string, error) {
+			bytes, err := json.Marshal(v)
+			if err != nil {
+				return "", err
+			}
+			return string(bytes), nil
+		},
+		"toJSONPretty": func(v interface{}) (string, error) {
+			bytes, err := json.MarshalIndent(v, "", "  ")
+			if err != nil {
+				return "", err
+			}
+			return string(bytes), nil
+		},
+
+		// String functions
+		"upper": func(s string) string {
+			return strings.ToUpper(s)
+		},
+		"lower": func(s string) string {
+			return strings.ToLower(s)
+		},
+		"trim": func(s string) string {
+			return strings.TrimSpace(s)
+		},
+		"replace": func(old, new, s string) string {
+			return strings.ReplaceAll(s, old, new)
+		},
+		"contains": func(substr, s string) bool {
+			return strings.Contains(s, substr)
+		},
+		"hasPrefix": func(prefix, s string) bool {
+			return strings.HasPrefix(s, prefix)
+		},
+		"hasSuffix": func(suffix, s string) bool {
+			return strings.HasSuffix(s, suffix)
+		},
+
+		// Default value function
+		"default": func(defaultVal, val interface{}) interface{} {
+			if val == nil || val == "" {
+				return defaultVal
+			}
+			return val
+		},
+
+		// Conditional functions
+		"if": func(condition bool, trueVal, falseVal interface{}) interface{} {
+			if condition {
+				return trueVal
+			}
+			return falseVal
+		},
+
+		// Math functions
+		"add": func(a, b int) int {
+			return a + b
+		},
+		"subtract": func(a, b int) int {
+			return a - b
+		},
+		"multiply": func(a, b int) int {
+			return a * b
+		},
+		"divide": func(a, b int) int {
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
 	}
 }
 
@@ -261,19 +404,45 @@ func (c *Client) forwardToDestination(ctx context.Context, dest config.HTTPDesti
 
 // makeRequest makes a single HTTP request to a destination
 func (c *Client) makeRequest(ctx context.Context, dest config.HTTPDestination, payload []byte) error {
+	// Log the complete HTTP request body for debugging
+	c.logger.Debug("HTTP request body",
+		zap.String("destination", dest.Name),
+		zap.String("url", dest.URL),
+		zap.String("method", dest.Method),
+		zap.String("request_body", string(payload)),
+		zap.Int("content_length", len(payload)),
+	)
+
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, dest.Method, dest.URL, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
+	// Set destination headers first
 	for key, value := range dest.Headers {
 		req.Header.Set(key, value)
 	}
 
+	// Add payload template headers if they exist
+	if dest.PayloadTemplate != nil && len(dest.PayloadTemplate.Headers) > 0 {
+		for key, value := range dest.PayloadTemplate.Headers {
+			req.Header.Set(key, value)
+		}
+		c.logger.Debug("Applied template headers",
+			zap.String("destination", dest.Name),
+			zap.Any("template_headers", dest.PayloadTemplate.Headers),
+		)
+	}
+
 	// Set content length
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+
+	// Log request headers for debugging
+	c.logger.Debug("HTTP request headers",
+		zap.String("destination", dest.Name),
+		zap.Any("headers", req.Header),
+	)
 
 	// Make request
 	resp, err := c.httpClient.Do(req)

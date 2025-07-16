@@ -94,13 +94,14 @@ type HTTPConfig struct {
 
 // HTTPDestination represents a single HTTP destination
 type HTTPDestination struct {
-	Name         string            `mapstructure:"name" yaml:"name"`
-	URL          string            `mapstructure:"url" yaml:"url"`
-	Method       string            `mapstructure:"method" yaml:"method"`
-	Headers      map[string]string `mapstructure:"headers" yaml:"headers"`
-	Timeout      time.Duration     `mapstructure:"timeout" yaml:"timeout"`
-	Retry        RetryConfig       `mapstructure:"retry" yaml:"retry"`
-	EventFilters []string          `mapstructure:"event_filters" yaml:"event_filters"` // Which events to forward to this destination
+	Name            string            `mapstructure:"name" yaml:"name"`
+	URL             string            `mapstructure:"url" yaml:"url"`
+	Method          string            `mapstructure:"method" yaml:"method"`
+	Headers         map[string]string `mapstructure:"headers" yaml:"headers"`
+	Timeout         time.Duration     `mapstructure:"timeout" yaml:"timeout"`
+	Retry           RetryConfig       `mapstructure:"retry" yaml:"retry"`
+	EventFilters    []string          `mapstructure:"event_filters" yaml:"event_filters"`       // Which events to forward to this destination
+	PayloadTemplate *PayloadTemplate  `mapstructure:"payload_template" yaml:"payload_template"` // Optional template for this destination
 }
 
 // RetryConfig represents retry configuration

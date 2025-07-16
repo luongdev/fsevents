@@ -1,0 +1,383 @@
+# FreeSWITCH ESL Sidecar App Configuration
+# Demonstrating custom Go templates for payload bodies
+
+# FreeSWITCH ESL Connection
+esl:
+  host: "192.168.13.137"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 10
+
+# Event filtering and processing
+events:
+  filter_logic: "AND"
+  
+  filters:
+    - field: "CC-Action"
+      operator: "regex"
+      value: "^(agent-)(status|state)(-change)$"
+
+  subscribe_events:
+    - "CUSTOM callcenter::info"
+    - "CHANNEL_CREATE"
+    - "CHANNEL_HANGUP"
+    - "HEARTBEAT"
+
+  field_mappings:
+    - from: "Event-Date-Timestamp"
+      to: "timestamp"
+      transforms: [":int", ":divide:1000", ":round"]
+
+  event_field_mappings:
+    - event_types: ["CUSTOM callcenter::*"]
+      mappings:
+        - from: "CC-Action"
+          to: "action"
+          transforms: ["trim"]
+        
+        - from: "CC-Agent"
+          to: "agent_id"
+          transforms: ["trim"]
+        
+        - from: "CC-Queue"
+          to: "queue_name"
+          transforms: ["trim"]
+        
+        - from: "CC-Agent-State"
+          to: "agent_state"
+          transforms: ["url_decode"]
+        
+        - from: "CC-Agent-Status"
+          to: "agent_status"
+          transforms: ["url_decode"]
+
+      field_filters:
+        include_fields:
+          - "timestamp" 
+          - "action"
+          - "agent_id"
+          - "queue_name"
+          - "agent_state"
+          - "agent_status"
+        exclude_fields:
+          - "headers"
+          - "event_subclass"
+          - "event_name"
+        include_body: false
+
+    - event_types: ["CHANNEL_*"]
+      mappings:
+        - from: "Unique-ID"
+          to: "call_id"
+          transforms: ["trim"]
+        
+        - from: "Caller-Caller-ID-Number"
+          to: "caller_number"
+          transforms: ["trim"]
+        
+        - from: "Caller-Destination-Number"
+          to: "destination_number"
+          transforms: ["trim"]
+        
+        - from: "Channel-State"
+          to: "channel_state"
+          transforms: ["trim"]
+
+      field_filters:
+        include_fields:
+          - "timestamp"
+          - "event_name"
+          - "call_id"
+          - "caller_number"
+          - "destination_number"
+          - "channel_state"
+        include_body: false
+
+# HTTP destinations với custom Go templates
+http:
+  destinations:
+    # 1. Analytics API - Custom JSON structure
+    - name: "analytics-api"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-analytics"
+      timeout: 30s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+      event_filters:
+        - "CUSTOM callcenter::*"
+      
+      payload_template:
+        format: "json"
+        headers:
+          X-Event-Source: "freeswitch-esl"
+          X-Analytics-Version: "v1.0"
+        template: |
+          {
+            "event_type": "{{.event_name | default "unknown"}}",
+            "timestamp": "{{.timestamp}}",
+            "processed_at": "{{now | formatTimeRFC3339}}",
+            "callcenter": {
+              "action": "{{.action | upper}}",
+              "agent": {
+                "id": "{{.agent_id | default "unknown"}}",
+                "state": "{{.agent_state | default "unknown"}}",
+                "status": "{{.agent_status | default "unknown"}}"
+              },
+              "queue": "{{.queue_name | default "unknown"}}"
+            },
+            "metadata": {
+              "source": "freeswitch-esl",
+              "version": "1.0",
+              "tenant_id": "analytics-tenant"
+            }
+          }
+
+    # 2. Call tracking - Minimal JSON
+    - name: "call-tracker"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-calls"
+      timeout: 15s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      event_filters:
+        - "CHANNEL_*"
+      
+      payload_template:
+        format: "json"
+        headers:
+          X-Call-Tracking: "enabled"
+        template: |
+          {
+            "call_id": "{{.call_id}}",
+            "event": "{{.event_name | lower}}",
+            "time": {{now | formatTimeUnix}},
+            "caller": "{{.caller_number | default "unknown"}}",
+            "destination": "{{.destination_number | default "unknown"}}",
+            "state": "{{.channel_state | default "unknown"}}"
+          }
+
+    # 3. Slack webhook - Human readable format
+    - name: "slack-webhook"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-slack"
+      timeout: 10s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 1s
+        max_delay: 5s
+      event_filters:
+        - "CUSTOM callcenter::*"
+      
+      payload_template:
+        format: "json"
+        template: |
+          {
+            "text": "CallCenter Event: {{.action | upper}}",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Agent {{.agent_id}}* {{if eq .action "agent-status-change"}}changed status{{else}}performed action{{end}}"
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Queue:*\n{{.queue_name | default "Unknown"}}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*State:*\n{{.agent_state | default "Unknown"}}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Status:*\n{{.agent_status | default "Unknown"}}"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Time:*\n{{.timestamp}}"
+                  }
+                ]
+              }
+            ]
+          }
+
+    # 4. Elasticsearch - Log format
+    - name: "elasticsearch"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-elasticsearch"
+      timeout: 20s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 10s
+      event_filters:
+        - "*"
+      
+      payload_template:
+        format: "json"
+        template: |
+          {
+            "@timestamp": "{{.timestamp}}",
+            "@version": "1",
+            "host": "freeswitch-server",
+            "source": "esl-sidecar",
+            "event": {
+              "name": "{{.event_name}}",
+              "subclass": "{{.event_subclass | default ""}}",
+              "timestamp": "{{.timestamp}}"
+            },
+            "tags": ["freeswitch", "esl", "{{.event_name | lower}}"],
+            {{if .action}}"callcenter": {{.| toJSON}},{{end}}
+            {{if .call_id}}"call": {{.| toJSON}},{{end}}
+            "processed_at": "{{now | formatTimeRFC3339}}"
+          }
+
+    # 5. XML format for legacy system
+    - name: "legacy-xml"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/xml"
+        X-Source: "fsevents-xml"
+      timeout: 15s
+      retry:
+        max_attempts: 2
+        backoff: "linear"
+        initial_delay: 1s
+        max_delay: 5s
+      event_filters:
+        - "HEARTBEAT"
+      
+      payload_template:
+        format: "xml"
+        template: |
+          <?xml version="1.0" encoding="UTF-8"?>
+          <freeswitch_event>
+            <event_name>{{.event_name}}</event_name>
+            <timestamp>{{.timestamp}}</timestamp>
+            <processed_at>{{now | formatTime "2006-01-02T15:04:05Z07:00" now}}</processed_at>
+            <source>freeswitch-esl-sidecar</source>
+            <version>1.0</version>
+          </freeswitch_event>
+
+    # 6. Form data for webhook
+    - name: "form-webhook"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/x-www-form-urlencoded"
+        X-Source: "fsevents-form"
+      timeout: 10s
+      retry:
+        max_attempts: 1
+        backoff: "fixed"
+        initial_delay: 1s
+        max_delay: 5s
+      event_filters:
+        - "CUSTOM callcenter::info"
+      
+      payload_template:
+        format: "form"
+        template: |
+          event={{.event_name}}&timestamp={{.timestamp}}&action={{.action | default "unknown"}}&agent={{.agent_id | default "unknown"}}&queue={{.queue_name | default "unknown"}}&state={{.agent_state | default "unknown"}}&processed_at={{now | formatTimeUnix}}
+
+    # 7. CSV format for data export
+    - name: "csv-export"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "text/csv"
+        X-Source: "fsevents-csv"
+      timeout: 30s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      event_filters:
+        - "CUSTOM callcenter::*"
+      
+      payload_template:
+        format: "json"  # Using JSON format but CSV template
+        template: |
+          "{{.timestamp}}","{{.event_name}}","{{.action | default ""}}","{{.agent_id | default ""}}","{{.queue_name | default ""}}","{{.agent_state | default ""}}","{{.agent_status | default ""}}"
+
+    # 8. Conditional template based on event type
+    - name: "conditional-format"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-conditional"
+      timeout: 20s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 1s
+        max_delay: 5s
+      event_filters:
+        - "*"
+      
+      payload_template:
+        format: "json"
+        template: |
+          {
+            "event": "{{.event_name}}",
+            "timestamp": "{{.timestamp}}",
+            {{if eq .event_name "CUSTOM"}}
+            "type": "callcenter",
+            "data": {
+              "action": "{{.action}}",
+              "agent_id": "{{.agent_id}}",
+              "queue_name": "{{.queue_name}}"
+            }
+            {{else if contains "CHANNEL" .event_name}}
+            "type": "channel",
+            "data": {
+              "call_id": "{{.call_id}}",
+              "caller": "{{.caller_number}}",
+              "destination": "{{.destination_number}}"
+            }
+            {{else}}
+            "type": "system",
+            "data": {{.| toJSON}}
+            {{end}}
+          }
+
+# Logging
+logging:
+  level: "debug"
+  format: "console"
+  output: "stdout"
+
+# Metrics
+metrics:
+  enabled: false
+  port: 8080
+  path: "/metrics" 
