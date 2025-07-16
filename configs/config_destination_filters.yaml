@@ -1,0 +1,265 @@
+# FreeSWITCH ESL Sidecar App Configuration
+# Demonstrating destination-specific advanced filters
+
+# FreeSWITCH ESL Connection
+esl:
+  host: "192.168.13.137"
+  port: 8021
+  password: "ClueCon"
+  timeout: 10s
+  reconnect_interval: 5s
+  max_reconnect_attempts: 10
+
+# Event filtering and processing
+events:
+  subscribe_events:
+    - "CUSTOM callcenter::info"
+    - "CHANNEL_CREATE"
+    - "CHANNEL_HANGUP"
+    - "HEARTBEAT"
+
+  field_mappings:
+    - from: "Event-Date-Timestamp"
+      to: "timestamp"
+      transforms: [":int", ":divide:1000", ":round"]
+
+  event_field_mappings:
+    - event_types: ["CUSTOM callcenter::*"]
+      mappings:
+        - from: "CC-Action"
+          to: "action"
+          transforms: ["trim"]
+        
+        - from: "CC-Agent"
+          to: "agent_id"
+          transforms: ["trim"]
+        
+        - from: "CC-Queue"
+          to: "queue_name"
+          transforms: ["trim"]
+        
+        - from: "CC-Agent-State"
+          to: "agent_state"
+          transforms: ["url_decode"]
+
+      field_filters:
+        include_fields:
+          - "timestamp" 
+          - "action"
+          - "agent_id"
+          - "queue_name"
+          - "agent_state"
+        include_body: false
+
+    - event_types: ["CHANNEL_*"]
+      mappings:
+        - from: "Unique-ID"
+          to: "call_id"
+          transforms: ["trim"]
+        
+        - from: "Caller-Caller-ID-Number"
+          to: "caller_number"
+          transforms: ["trim"]
+        
+        - from: "Call-Direction"
+          to: "direction"
+          transforms: ["trim"]
+
+      field_filters:
+        include_fields:
+          - "timestamp"
+          - "event_name"
+          - "call_id"
+          - "caller_number"
+          - "direction"
+        include_body: false
+
+# HTTP destinations với advanced destination filters
+http:
+  destinations:
+    # 1. Agent Status Monitoring - Chỉ nhận agent state changes
+    - name: "agent-status-monitor"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-agent-status"
+      timeout: 30s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 30s
+      
+      # Advanced filters cho agent status changes
+      filter_logic: "AND"
+      filters:
+        - field: "Event-Name"
+          operator: "equals"
+          value: "CUSTOM"
+        
+        - field: "Event-Subclass"
+          operator: "equals"
+          value: "callcenter::info"
+        
+        # Chỉ quan tâm agent status/state changes
+        - field: "CC-Action"
+          operator: "regex"
+          value: "^agent-(status|state)-change$"
+
+    # 2. Support Queue Monitor - Chỉ events từ support queue
+    - name: "support-queue-monitor"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-support-queue"
+      timeout: 20s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      
+      # Filter cho support queue với OR logic
+      filter_logic: "OR"
+      filters:
+        # Support queue events
+        - field: "CC-Queue"
+          operator: "equals"
+          value: "support"
+        
+        # Manager/supervisor actions (bất kỳ queue nào)
+        - field: "CC-Agent"
+          operator: "starts_with"
+          value: "manager-"
+
+    # 3. Inbound Call Tracker - Chỉ inbound calls
+    - name: "inbound-call-tracker"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-inbound-calls"
+      timeout: 15s
+      retry:
+        max_attempts: 2
+        backoff: "linear"
+        initial_delay: 1s
+        max_delay: 10s
+      
+      # Filter cho inbound calls với AND logic
+      filter_logic: "AND"
+      filters:
+        - field: "Event-Name"
+          operator: "regex"
+          value: "^CHANNEL_(CREATE|HANGUP)$"
+        
+        - field: "Call-Direction"
+          operator: "equals"
+          value: "inbound"
+
+    # 4. External Call Monitor - Calls from external numbers
+    - name: "external-call-monitor"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-external-calls"
+      timeout: 10s
+      retry:
+        max_attempts: 1
+        backoff: "fixed"
+        initial_delay: 1s
+        max_delay: 5s
+      
+      # Filter cho external calls với regex
+      filter_logic: "AND"
+      filters:
+        - field: "Event-Name"
+          operator: "equals"
+          value: "CHANNEL_CREATE"
+        
+        # External phone numbers (not internal extensions)
+        - field: "Caller-Caller-ID-Number"
+          operator: "regex"
+          value: "^\\+?[1-9]\\d{7,14}$"  # International phone format
+
+    # 5. High Priority Alerts - OR logic for different critical events
+    - name: "high-priority-alerts"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-alerts"
+        X-Priority: "high"
+      timeout: 5s
+      retry:
+        max_attempts: 1
+        backoff: "fixed"
+        initial_delay: 500ms
+        max_delay: 1s
+      
+      # OR logic cho các alert khác nhau
+      filter_logic: "OR"
+      filters:
+        # Agent logout unexpectedly
+        - field: "CC-Action"
+          operator: "equals"
+          value: "agent-logout"
+        
+        # Call hangup với error
+        - field: "Hangup-Cause"
+          operator: "not_equals"
+          value: "NORMAL_CLEARING"
+        
+        # System issues (could be detected via custom logic)
+        - field: "Event-Name"
+          operator: "equals"
+          value: "SYSTEM_ERROR"
+
+    # 6. Legacy Event Filter Example - Using old simple filters
+    - name: "legacy-heartbeat-monitor"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-legacy"
+      timeout: 30s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      
+      # Sử dụng legacy event_filters (backward compatibility)
+      event_filters:
+        - "HEARTBEAT"
+
+    # 7. All Events Audit Logger - No filters
+    - name: "audit-logger"
+      url: "https://httpbin.org/post"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+        X-Source: "fsevents-audit"
+      timeout: 30s
+      retry:
+        max_attempts: 2
+        backoff: "fixed"
+        initial_delay: 2s
+        max_delay: 5s
+      
+      # Không có filters - nhận tất cả events
+
+# Logging
+logging:
+  level: "debug"  # Use debug để xem filter evaluation logs
+  format: "console"
+  output: "stdout"
+
+# Metrics
+metrics:
+  enabled: false
+  port: 8080
+  path: "/metrics" 

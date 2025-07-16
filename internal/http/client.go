@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -100,21 +101,15 @@ func (c *Client) ForwardEvent(ctx context.Context, event *types.Event) error {
 func (c *Client) getEligibleDestinations(event *types.Event) []config.HTTPDestination {
 	var eligible []config.HTTPDestination
 
-	// Build event name with subclass for CUSTOM events
-	eventNameWithSubclass := event.Name
-	if event.Name == "CUSTOM" && event.Subclass != "" {
-		eventNameWithSubclass = event.Name + " " + event.Subclass
-	}
-
 	for _, dest := range c.destinations {
-		// If no event filters configured, forward all events
-		if len(dest.EventFilters) == 0 {
+		// If no filters configured (neither EventFilters nor Filters), forward all events
+		if len(dest.EventFilters) == 0 && len(dest.Filters) == 0 {
 			eligible = append(eligible, dest)
 			continue
 		}
 
 		// Check if this destination should receive this event
-		if c.shouldForwardToDestination(dest, event.Name, eventNameWithSubclass) {
+		if c.shouldForwardToDestination(dest, event) {
 			eligible = append(eligible, dest)
 		}
 	}
@@ -123,10 +118,22 @@ func (c *Client) getEligibleDestinations(event *types.Event) []config.HTTPDestin
 }
 
 // shouldForwardToDestination checks if a destination should receive an event
-func (c *Client) shouldForwardToDestination(dest config.HTTPDestination, eventName, eventNameWithSubclass string) bool {
+func (c *Client) shouldForwardToDestination(dest config.HTTPDestination, event *types.Event) bool {
+	// First check advanced filters if they exist
+	if len(dest.Filters) > 0 {
+		return c.evaluateDestinationFilters(dest, event)
+	}
+
+	// Build event name with subclass for CUSTOM events (for legacy EventFilters)
+	eventNameWithSubclass := event.Name
+	if event.Name == "CUSTOM" && event.Subclass != "" {
+		eventNameWithSubclass = event.Name + " " + event.Subclass
+	}
+
+	// Fall back to legacy EventFilters for backward compatibility
 	for _, filter := range dest.EventFilters {
 		// Exact match
-		if filter == eventName || filter == eventNameWithSubclass {
+		if filter == event.Name || filter == eventNameWithSubclass {
 			return true
 		}
 
@@ -138,13 +145,145 @@ func (c *Client) shouldForwardToDestination(dest config.HTTPDestination, eventNa
 		// Prefix wildcard match
 		if strings.HasSuffix(filter, "*") {
 			prefix := strings.TrimSuffix(filter, "*")
-			if strings.HasPrefix(eventName, prefix) || strings.HasPrefix(eventNameWithSubclass, prefix) {
+			if strings.HasPrefix(event.Name, prefix) || strings.HasPrefix(eventNameWithSubclass, prefix) {
 				return true
 			}
 		}
 	}
 
 	return false
+}
+
+// evaluateDestinationFilters evaluates advanced filter rules for a destination
+func (c *Client) evaluateDestinationFilters(dest config.HTTPDestination, event *types.Event) bool {
+	// Build event name with subclass for logging
+	eventNameWithSubclass := event.Name
+	if event.Name == "CUSTOM" && event.Subclass != "" {
+		eventNameWithSubclass = event.Name + " " + event.Subclass
+	}
+
+	// Default to AND logic if not specified
+	filterLogic := dest.FilterLogic
+	if filterLogic == "" {
+		filterLogic = "AND"
+	}
+
+	c.logger.Debug("Evaluating destination filters",
+		zap.String("destination", dest.Name),
+		zap.String("event_name", event.Name),
+		zap.String("event_name_with_subclass", eventNameWithSubclass),
+		zap.Int("filter_count", len(dest.Filters)),
+		zap.String("filter_logic", filterLogic),
+	)
+
+	// Apply filter rules based on logic type
+	if filterLogic == "OR" {
+		// OR logic: event passes if ANY filter matches
+		for _, filter := range dest.Filters {
+			if c.evaluateDestinationFilter(event, filter, dest.Name) {
+				c.logger.Debug("Event passed OR destination filter",
+					zap.String("destination", dest.Name),
+					zap.String("event_name", event.Name),
+					zap.String("filter_field", filter.Field),
+					zap.String("filter_operator", filter.Operator),
+					zap.String("filter_value", filter.Value),
+				)
+				return true
+			}
+		}
+
+		c.logger.Debug("Event filtered out by destination OR logic - no filters matched",
+			zap.String("destination", dest.Name),
+			zap.String("event_name", event.Name),
+			zap.Int("filter_count", len(dest.Filters)),
+		)
+		return false
+	} else {
+		// AND logic: event passes only if ALL filters match
+		for _, filter := range dest.Filters {
+			if !c.evaluateDestinationFilter(event, filter, dest.Name) {
+				c.logger.Debug("Event filtered out by destination AND logic",
+					zap.String("destination", dest.Name),
+					zap.String("event_name", event.Name),
+					zap.String("filter_field", filter.Field),
+					zap.String("filter_operator", filter.Operator),
+					zap.String("filter_value", filter.Value),
+				)
+				return false
+			}
+		}
+
+		c.logger.Debug("Event passed all destination AND filters",
+			zap.String("destination", dest.Name),
+			zap.String("event_name", event.Name),
+			zap.Int("filter_count", len(dest.Filters)),
+		)
+		return true
+	}
+}
+
+// evaluateDestinationFilter evaluates a single filter rule against an event for destination filtering
+func (c *Client) evaluateDestinationFilter(event *types.Event, filter config.FilterRule, destinationName string) bool {
+	// Get the actual value from the event
+	var actualValue string
+
+	switch filter.Field {
+	case "Event-Name":
+		actualValue = event.Name
+	case "Event-Subclass":
+		actualValue = event.Subclass
+	default:
+		// For destination filtering, we only have basic event info
+		// Try to get from headers if event has them, otherwise empty
+		if event.Headers != nil {
+			actualValue = event.GetHeader(filter.Field)
+		}
+	}
+
+	// Apply the operator
+	switch strings.ToLower(filter.Operator) {
+	case "equals", "eq", "=", "==":
+		return actualValue == filter.Value
+	case "not_equals", "ne", "!=":
+		return actualValue != filter.Value
+	case "contains":
+		return strings.Contains(actualValue, filter.Value)
+	case "not_contains":
+		return !strings.Contains(actualValue, filter.Value)
+	case "starts_with":
+		return strings.HasPrefix(actualValue, filter.Value)
+	case "ends_with":
+		return strings.HasSuffix(actualValue, filter.Value)
+	case "regex":
+		// Compile and match regex pattern
+		regex, err := regexp.Compile(filter.Value)
+		if err != nil {
+			c.logger.Error("Invalid regex pattern in destination filter",
+				zap.String("destination", destinationName),
+				zap.String("field", filter.Field),
+				zap.String("pattern", filter.Value),
+				zap.Error(err),
+			)
+			return false
+		}
+
+		matched := regex.MatchString(actualValue)
+		c.logger.Debug("Regex destination filter evaluation",
+			zap.String("destination", destinationName),
+			zap.String("field", filter.Field),
+			zap.String("pattern", filter.Value),
+			zap.String("actual_value", actualValue),
+			zap.Bool("matched", matched),
+		)
+		return matched
+	default:
+		c.logger.Warn("Unknown filter operator in destination filter",
+			zap.String("destination", destinationName),
+			zap.String("operator", filter.Operator),
+			zap.String("field", filter.Field),
+		)
+		return false
+	}
 }
 
 // createPayload converts an event to JSON payload using configured mappers and processors

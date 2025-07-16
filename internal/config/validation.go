@@ -298,7 +298,7 @@ func (d *HTTPDestination) Validate() error {
 		return fmt.Errorf("timeout must be positive, got %v", d.Timeout)
 	}
 
-	// Validate event filters
+	// Validate event filters (legacy support)
 	for _, filter := range d.EventFilters {
 		if filter == "" {
 			return fmt.Errorf("event filter cannot be empty for destination %s", d.Name)
@@ -306,6 +306,18 @@ func (d *HTTPDestination) Validate() error {
 		// Basic validation for event names
 		if !isValidEventFilter(filter) {
 			return fmt.Errorf("invalid event filter '%s' for destination %s", filter, d.Name)
+		}
+	}
+
+	// Validate filter logic
+	if d.FilterLogic != "" && d.FilterLogic != "AND" && d.FilterLogic != "OR" {
+		return fmt.Errorf("filter_logic must be 'AND' or 'OR' for destination %s, got: %s", d.Name, d.FilterLogic)
+	}
+
+	// Validate advanced filters
+	for i, filter := range d.Filters {
+		if err := filter.Validate(); err != nil {
+			return fmt.Errorf("destination %s filter %d error: %w", d.Name, i, err)
 		}
 	}
 

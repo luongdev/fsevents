@@ -100,7 +100,9 @@ type HTTPDestination struct {
 	Headers         map[string]string `mapstructure:"headers" yaml:"headers"`
 	Timeout         time.Duration     `mapstructure:"timeout" yaml:"timeout"`
 	Retry           RetryConfig       `mapstructure:"retry" yaml:"retry"`
-	EventFilters    []string          `mapstructure:"event_filters" yaml:"event_filters"`       // Which events to forward to this destination
+	EventFilters    []string          `mapstructure:"event_filters" yaml:"event_filters"`       // Simple event name filters (legacy support)
+	Filters         []FilterRule      `mapstructure:"filters" yaml:"filters"`                   // Advanced filter rules with operators
+	FilterLogic     string            `mapstructure:"filter_logic" yaml:"filter_logic"`         // "AND" or "OR" logic for filters (default: "AND")
 	PayloadTemplate *PayloadTemplate  `mapstructure:"payload_template" yaml:"payload_template"` // Optional template for this destination
 }
 

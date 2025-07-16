@@ -11,15 +11,6 @@ esl:
 
 # Event filtering and processing
 events:
-  # Use OR logic if you want to match multiple different CC-Action patterns
-  # Use AND logic if you want ALL filters to match (default)
-  filter_logic: "AND"  # Change to "OR" if needed
-  
-  filters:
-    - field: "CC-Action"
-      operator: "regex"
-      value: "^(agent-)(status|state)(-change)$"
-
   subscribe_events:
     - "CUSTOM callcenter::info"
 
@@ -91,6 +82,12 @@ http:
         max_delay: 5s
       event_filters:
         - "CUSTOM callcenter::*"
+
+      filter_logic: "AND"
+      filters:
+        - field: "Cc-Action"
+          operator: "regex"
+          value: "^(agent-)(status|state)(-change)$"
 
 # Logging
 logging:
