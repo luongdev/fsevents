@@ -20,12 +20,21 @@ type Config struct {
 
 // ESLConfig represents FreeSWITCH ESL connection configuration
 type ESLConfig struct {
-	Host                 string        `mapstructure:"host"`
-	Port                 int           `mapstructure:"port"`
-	Password             string        `mapstructure:"password"`
-	Timeout              time.Duration `mapstructure:"timeout"`
-	ReconnectInterval    time.Duration `mapstructure:"reconnect_interval"`
-	MaxReconnectAttempts int           `mapstructure:"max_reconnect_attempts"`
+	Host                 string          `mapstructure:"host"`
+	Port                 int             `mapstructure:"port"`
+	Password             string          `mapstructure:"password"`
+	Timeout              time.Duration   `mapstructure:"timeout"`
+	ReconnectInterval    time.Duration   `mapstructure:"reconnect_interval"`
+	MaxReconnectAttempts int             `mapstructure:"max_reconnect_attempts"`
+	Keepalive            KeepaliveConfig `mapstructure:"keepalive" yaml:"keepalive"`
+}
+
+// KeepaliveConfig represents heartbeat/keepalive settings for ESL connection
+type KeepaliveConfig struct {
+	Enabled          bool          `mapstructure:"enabled" yaml:"enabled"`
+	Interval         time.Duration `mapstructure:"interval" yaml:"interval"`
+	Timeout          time.Duration `mapstructure:"timeout" yaml:"timeout"`
+	FailureThreshold int           `mapstructure:"failure_threshold" yaml:"failure_threshold"`
 }
 
 // FieldMapping defines how to map event headers to output fields
@@ -278,6 +287,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("esl.timeout", "10s")
 	v.SetDefault("esl.reconnect_interval", "5s")
 	v.SetDefault("esl.max_reconnect_attempts", 10)
+	// ESL keepalive defaults
+	v.SetDefault("esl.keepalive.enabled", true)
+	v.SetDefault("esl.keepalive.interval", "15s")
+	v.SetDefault("esl.keepalive.timeout", "3s")
+	v.SetDefault("esl.keepalive.failure_threshold", 2)
 
 	// Events defaults
 	v.SetDefault("events.subscribe_events", []string{"HEARTBEAT"})
@@ -307,6 +321,12 @@ func configToMap(c *Config) map[string]interface{} {
 			"timeout":                c.ESL.Timeout.String(),
 			"reconnect_interval":     c.ESL.ReconnectInterval.String(),
 			"max_reconnect_attempts": c.ESL.MaxReconnectAttempts,
+			"keepalive": map[string]interface{}{
+				"enabled":           c.ESL.Keepalive.Enabled,
+				"interval":          c.ESL.Keepalive.Interval.String(),
+				"timeout":           c.ESL.Keepalive.Timeout.String(),
+				"failure_threshold": c.ESL.Keepalive.FailureThreshold,
+			},
 		},
 		"events": map[string]interface{}{
 			"subscribe_events": c.Events.SubscribeEvents,

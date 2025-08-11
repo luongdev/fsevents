@@ -8,6 +8,11 @@ esl:
   timeout: 10s
   reconnect_interval: 5s
   max_reconnect_attempts: 10
+  keepalive:
+    enabled: true
+    interval: 15s
+    timeout: 3s
+    failure_threshold: 2
 
 # Event filtering and processing
 events:

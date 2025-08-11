@@ -13,6 +13,7 @@ import (
 
 	"fsevents/internal/config"
 	"fsevents/pkg/types"
+	"strings"
 )
 
 // Client represents an ESL client connection to FreeSWITCH
@@ -27,6 +28,10 @@ type Client struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	listenerID string
+	// runtime
+	configuredEvents []string
+	hbStopCh         chan struct{}
+	reconnecting     atomic.Bool
 }
 
 // ConnectionStats tracks ESL connection statistics
@@ -103,9 +108,20 @@ func (c *Client) ConnectWithEvents(events []string) error {
 	c.listenerID = c.conn.RegisterEventListener(eslgo.EventListenAll, c.handleEvent)
 
 	// Enable events
-	if err := c.subscribeToEvents(events); err != nil {
-		c.Close()
+	c.configuredEvents = c.getConfiguredEvents(events)
+	if err := c.subscribeToEvents(c.configuredEvents); err != nil {
+		// Do not call Close() here since we are holding c.mu; close connection directly
+		if c.conn != nil {
+			c.conn.ExitAndClose()
+			c.conn = nil
+		}
+		c.isRunning.Store(false)
 		return fmt.Errorf("failed to subscribe to events: %w", err)
+	}
+
+	// Start keepalive/heartbeat if enabled
+	if c.config.Keepalive.Enabled {
+		c.startHeartbeat()
 	}
 
 	return nil
@@ -135,7 +151,8 @@ func (c *Client) subscribeToEvents(configuredEvents []string) error {
 		return fmt.Errorf("failed to subscribe to events: %w", err)
 	}
 
-	if !response.IsOk() {
+	// Treat as success unless Reply-Text begins with -ERR
+	if !c.responseIndicatesSuccess(response) {
 		replyText := response.GetHeader("Reply-Text")
 		c.logger.Error("Event subscription failed", zap.String("reply", replyText))
 		return fmt.Errorf("event subscription failed: %s", replyText)
@@ -258,6 +275,9 @@ func (c *Client) handleDisconnect() {
 	c.updateStats(func(s *ConnectionStats) {
 		s.LastError = fmt.Errorf("connection lost")
 	})
+
+	// Attempt reconnection
+	c.triggerReconnect()
 }
 
 // updateStats safely updates connection statistics
@@ -280,6 +300,10 @@ func (c *Client) Close() error {
 
 	c.isRunning.Store(false)
 	c.cancel()
+	if c.hbStopCh != nil {
+		close(c.hbStopCh)
+		c.hbStopCh = nil
+	}
 
 	if c.conn != nil {
 		// Remove event listener
@@ -296,4 +320,125 @@ func (c *Client) Close() error {
 
 	c.logger.Info("ESL connection closed")
 	return nil
+}
+
+// startHeartbeat launches a goroutine that periodically calls FreeSWITCH status API
+func (c *Client) startHeartbeat() {
+	if c.hbStopCh != nil {
+		return
+	}
+	c.hbStopCh = make(chan struct{})
+	failureCount := 0
+	interval := c.config.Keepalive.Interval
+	timeout := c.config.Keepalive.Timeout
+	threshold := c.config.Keepalive.FailureThreshold
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-c.hbStopCh:
+				return
+			case <-c.ctx.Done():
+				return
+			case <-ticker.C:
+				if !c.isRunning.Load() {
+					continue
+				}
+				// Send status API
+				ctx, cancel := context.WithTimeout(c.ctx, timeout)
+				resp, err := c.conn.SendCommand(ctx, command.API{Command: "status"})
+				cancel()
+				if err != nil || resp == nil || !c.responseIndicatesSuccess(resp) {
+					failureCount++
+					c.logger.Warn("ESL heartbeat failed", zap.Int("consecutive_failures", failureCount), zap.Error(err))
+					if failureCount >= threshold {
+						c.logger.Error("ESL heartbeat threshold exceeded, triggering reconnect")
+						c.handleDisconnect()
+					}
+					continue
+				}
+				// success
+				failureCount = 0
+			}
+		}
+	}()
+}
+
+// responseIndicatesSuccess returns true unless Reply-Text begins with "-ERR"
+func (c *Client) responseIndicatesSuccess(resp *eslgo.RawResponse) bool {
+	if resp == nil {
+		return false
+	}
+	reply := resp.GetHeader("Reply-Text")
+	if len(reply) == 0 {
+		// If there is no explicit reply, consider it success by default
+		return true
+	}
+	return !strings.HasPrefix(reply, "-ERR")
+}
+
+// triggerReconnect starts a reconnection loop if not already running
+func (c *Client) triggerReconnect() {
+	if !c.reconnecting.CompareAndSwap(false, true) {
+		return // already reconnecting
+	}
+
+	go func() {
+		defer c.reconnecting.Store(false)
+
+		attempts := 0
+		for {
+			if c.ctx.Err() != nil {
+				return
+			}
+			// Respect max attempts (0 means infinite)
+			if c.config.MaxReconnectAttempts > 0 && attempts >= c.config.MaxReconnectAttempts {
+				c.logger.Error("Max reconnect attempts reached; giving up")
+				return
+			}
+
+			attempts++
+			c.updateStats(func(s *ConnectionStats) { s.ReconnectAttempts++ })
+			c.logger.Info("Attempting to reconnect to FreeSWITCH ESL", zap.Int("attempt", attempts))
+
+			// Establish new connection
+			addr := fmt.Sprintf("%s:%d", c.config.Host, c.config.Port)
+			conn, err := eslgo.Dial(addr, c.config.Password, func() {
+				c.logger.Warn("ESL connection disconnected (during reconnect)")
+				c.handleDisconnect()
+			})
+			if err != nil {
+				c.logger.Warn("Reconnect attempt failed", zap.Error(err))
+				time.Sleep(c.config.ReconnectInterval)
+				continue
+			}
+
+			// Swap connection safely
+			c.mu.Lock()
+			c.conn = conn
+			c.isRunning.Store(true)
+			// re-register listener
+			c.listenerID = c.conn.RegisterEventListener(eslgo.EventListenAll, c.handleEvent)
+			c.mu.Unlock()
+
+			// Re-subscribe to events using cached list
+			if err := c.subscribeToEvents(c.configuredEvents); err != nil {
+				c.logger.Error("Failed to re-subscribe to events after reconnect", zap.Error(err))
+				// close and try again
+				c.conn.ExitAndClose()
+				time.Sleep(c.config.ReconnectInterval)
+				continue
+			}
+
+			c.logger.Info("Reconnected to FreeSWITCH ESL successfully")
+
+			// restart heartbeat if enabled
+			if c.config.Keepalive.Enabled {
+				c.startHeartbeat()
+			}
+			return
+		}
+	}()
 }

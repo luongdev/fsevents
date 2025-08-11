@@ -14,23 +14,23 @@ import (
 // Validate validates the entire configuration
 func (c *Config) Validate() error {
 	if err := c.ESL.Validate(); err != nil {
-		return fmt.Errorf("ESL configuration error: %w", err)
+		return fmt.Errorf("esl configuration error: %w", err)
 	}
 
 	if err := c.Events.Validate(); err != nil {
-		return fmt.Errorf("Events configuration error: %w", err)
+		return fmt.Errorf("events configuration error: %w", err)
 	}
 
 	if err := c.HTTP.Validate(); err != nil {
-		return fmt.Errorf("HTTP configuration error: %w", err)
+		return fmt.Errorf("http configuration error: %w", err)
 	}
 
 	if err := c.Logging.Validate(); err != nil {
-		return fmt.Errorf("Logging configuration error: %w", err)
+		return fmt.Errorf("logging configuration error: %w", err)
 	}
 
 	if err := c.Metrics.Validate(); err != nil {
-		return fmt.Errorf("Metrics configuration error: %w", err)
+		return fmt.Errorf("metrics configuration error: %w", err)
 	}
 
 	return nil
@@ -60,6 +60,22 @@ func (e *ESLConfig) Validate() error {
 
 	if e.MaxReconnectAttempts < 0 {
 		return fmt.Errorf("max_reconnect_attempts cannot be negative, got %d", e.MaxReconnectAttempts)
+	}
+
+	// Validate keepalive settings
+	if e.Keepalive.Enabled {
+		if e.Keepalive.Interval <= 0 {
+			return fmt.Errorf("keepalive.interval must be positive, got %v", e.Keepalive.Interval)
+		}
+		if e.Keepalive.Timeout <= 0 {
+			return fmt.Errorf("keepalive.timeout must be positive, got %v", e.Keepalive.Timeout)
+		}
+		if e.Keepalive.Timeout >= e.Keepalive.Interval {
+			return fmt.Errorf("keepalive.timeout (%v) should be less than keepalive.interval (%v)", e.Keepalive.Timeout, e.Keepalive.Interval)
+		}
+		if e.Keepalive.FailureThreshold <= 0 {
+			return fmt.Errorf("keepalive.failure_threshold must be > 0, got %d", e.Keepalive.FailureThreshold)
+		}
 	}
 
 	return nil
