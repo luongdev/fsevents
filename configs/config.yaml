@@ -14,6 +14,7 @@ events:
 
   event_field_mappings:
     # Agent status events for ASM - with field mapping
+    # NOTE: After mapper.go fix, this will send BOTH mapped fields AND raw headers
     - event_types: ["CUSTOM callcenter::*"]
       mappings:
         - from: "Event-Date-Timestamp"
@@ -35,46 +36,42 @@ events:
           to: "status"
           transforms: ["url_decode"]
       field_filters:
-        include_headers:
-          - "Event-*"
-          - "Unique-ID"
-          - "Cc-*"
-        exclude_headers:
-          - "*-Ipv6"
-          - "*-Switchname"
-        include_fields:
-          - "changeTime"
-          - "action"
-          - "agentId"
-          - "state"
-          - "status"
-        exclude_fields:
-        #- "headers"
-        #- "event_subclass"
-        #- "event_name"
+        # include_headers:
+        #   - "Event-*"
+        #   - "Unique-ID"
+        #   - "Unique-Id"
+        #   - "CC-*"  # Callcenter headers (uppercase)
+        #   - "Cc-*"  # Callcenter headers (mixed case)
+        #   - "variable_*"
+        #   - "Variable_*"
+        # exclude_headers:
+        #   - "*-Ipv6"
+        #   - "*-Switchname"
         include_body: false
 
-    # # Channel events for Call State Manager - NO field mapping, keep raw format
-    # - event_types: ["CHANNEL_*"]
-    #   mappings: []
-    #   field_filters:
-    #     include_headers:
-    #       - "Event-*"
-    #       - "Unique-ID"
-    #       - "Channel-*"
-    #       - "Caller-*"
-    #       - "Call-Direction"
-    #       - "variable_*"
-    #       - "Application*"
-    #       - "Hangup-Cause"
-    #       - "Bridge-*"
-    #       - "Other-Leg-*"
-    #       - "Originator-*"
-    #     exclude_headers:
-    #       - "*-Ipv6"
-    #       - "*-Switchname"
-    #       - "*-Calling-*"
-    #     include_body: false
+    # Channel events for Call State Manager - NO field mapping, keep raw format
+    - event_types: ["CHANNEL_*"]
+      mappings: []
+      field_filters:
+        # include_headers:
+        #   - "Event-*"
+        #   - "Unique-ID"
+        #   - "Unique-Id"
+        #   - "Channel-*"
+        #   - "Caller-*"
+        #   - "Call-Direction"
+        #   - "variable_*"
+        #   - "Variable_*"
+        #   - "Application*"
+        #   - "Hangup-Cause"
+        #   - "Bridge-*"
+        #   - "Other-Leg-*"
+        #   - "Originator-*"
+        # exclude_headers:
+        #   - "*-Ipv6"
+        #   - "*-Switchname"
+        #   - "*-Calling-*"
+        include_body: false
 
 # HTTP destinations
 http:
@@ -111,6 +108,7 @@ http:
         max_delay: 10s
       event_filters:
         - "CHANNEL_*"
+        - "CUSTOM callcenter::*"
 
 # Logging
 logging:

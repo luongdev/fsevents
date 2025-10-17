@@ -58,17 +58,16 @@ func (m *FieldMapper) MapEvent(event *types.Event) map[string]interface{} {
 		}
 	}
 
-	// If no mappings configured, include filtered headers as fallback
-	if len(applicableMappings) == 0 {
-		filteredHeaders := m.filterHeaders(event.Headers, applicableFilters)
-		if len(filteredHeaders) > 0 {
-			result["headers"] = filteredHeaders
-		}
+	// Include filtered headers (even when mappings exist)
+	// This allows both mapped fields AND raw headers to coexist
+	filteredHeaders := m.filterHeaders(event.Headers, applicableFilters)
+	if len(filteredHeaders) > 0 {
+		result["headers"] = filteredHeaders
+	}
 
-		// Include body if allowed by filters
-		if event.Body != "" && m.shouldIncludeBody(applicableFilters) {
-			result["body"] = event.Body
-		}
+	// Include body if allowed by filters
+	if event.Body != "" && m.shouldIncludeBody(applicableFilters) {
+		result["body"] = event.Body
 	}
 
 	// Apply field filtering to the final result
