@@ -51,11 +51,6 @@ func New(cfg *config.Config) *App {
 
 // Start starts the application
 func (a *App) Start() error {
-	a.logger.Info("Starting FreeSWITCH ESL Sidecar App",
-		zap.String("version", "0.1.0"),
-	)
-
-	// Setup signal handling for graceful shutdown
 	signal.Notify(a.shutdown, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	a.logger.Info("Signal handling setup complete")
 
@@ -279,17 +274,19 @@ func (p *EventProcessorImpl) ProcessEvent(ctx context.Context, event *types.Even
 		return nil
 	}
 
-	// Forward to HTTP endpoints
-	httpCtx, cancel := context.WithTimeout(p.ctx, 60*time.Second)
-	defer cancel()
+	// Forward to HTTP endpoints asynchronously (non-blocking)
+	// This allows workers to process next event immediately
+	go func() {
+		httpCtx, cancel := context.WithTimeout(p.ctx, 60*time.Second)
+		defer cancel()
 
-	if err := p.httpClient.ForwardEvent(httpCtx, event); err != nil {
-		p.logger.Error("Failed to forward event to HTTP destinations",
-			zap.String("event_name", event.Name),
-			zap.String("unique_id", event.GetHeader("Unique-ID")),
-			zap.Error(err))
-		// Don't return error - we want to continue processing other events
-	}
+		if err := p.httpClient.ForwardEvent(httpCtx, event); err != nil {
+			p.logger.Error("Failed to forward event to HTTP destinations",
+				zap.String("event_name", event.Name),
+				zap.String("unique_id", event.GetHeader("Unique-ID")),
+				zap.Error(err))
+		}
+	}()
 
 	return nil
 }
