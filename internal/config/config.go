@@ -105,7 +105,9 @@ type HTTPConfig struct {
 // HTTPDestination represents a single HTTP destination
 type HTTPDestination struct {
 	Name            string            `mapstructure:"name" yaml:"name"`
-	URL             string            `mapstructure:"url" yaml:"url"`
+	URL             string            `mapstructure:"url" yaml:"url"`           // Single URL (backward compatible)
+	URLs            []string          `mapstructure:"urls" yaml:"urls"`         // Multiple URLs (new feature)
+	Strategy        string            `mapstructure:"strategy" yaml:"strategy"` // round-robin, failover, broadcast, random
 	Method          string            `mapstructure:"method" yaml:"method"`
 	Headers         map[string]string `mapstructure:"headers" yaml:"headers"`
 	Timeout         time.Duration     `mapstructure:"timeout" yaml:"timeout"`
@@ -114,6 +116,30 @@ type HTTPDestination struct {
 	Filters         []FilterRule      `mapstructure:"filters" yaml:"filters"`                   // Advanced filter rules with operators
 	FilterLogic     string            `mapstructure:"filter_logic" yaml:"filter_logic"`         // "AND" or "OR" logic for filters (default: "AND")
 	PayloadTemplate *PayloadTemplate  `mapstructure:"payload_template" yaml:"payload_template"` // Optional template for this destination
+}
+
+// GetURLs returns the list of URLs (handles backward compatibility)
+func (d *HTTPDestination) GetURLs() []string {
+	if len(d.URLs) > 0 {
+		return d.URLs
+	}
+	if d.URL != "" {
+		return []string{d.URL}
+	}
+	return []string{}
+}
+
+// IsMultiURL returns true if destination has multiple URLs
+func (d *HTTPDestination) IsMultiURL() bool {
+	return len(d.URLs) > 1
+}
+
+// GetStrategy returns the strategy (default: round-robin)
+func (d *HTTPDestination) GetStrategy() string {
+	if d.Strategy == "" {
+		return "round-robin"
+	}
+	return d.Strategy
 }
 
 // RetryConfig represents retry configuration

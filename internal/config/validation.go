@@ -292,13 +292,45 @@ func (d *HTTPDestination) Validate() error {
 		return fmt.Errorf("name cannot be empty")
 	}
 
-	if d.URL == "" {
-		return fmt.Errorf("URL cannot be empty")
+	// Validate that destination has at least one URL configured
+	if d.URL == "" && len(d.URLs) == 0 {
+		return fmt.Errorf("destination %s must have either 'url' or 'urls' configured", d.Name)
 	}
 
-	// Validate URL format
-	if _, err := url.Parse(d.URL); err != nil {
-		return fmt.Errorf("invalid URL format: %w", err)
+	// Validate URLs array if provided
+	if len(d.URLs) > 0 {
+		// URLs array cannot be empty
+		if len(d.URLs) == 0 {
+			return fmt.Errorf("destination %s: 'urls' array cannot be empty", d.Name)
+		}
+
+		// Validate each URL in the array
+		for i, urlStr := range d.URLs {
+			if urlStr == "" {
+				return fmt.Errorf("destination %s: URL at index %d cannot be empty", d.Name, i)
+			}
+			if _, err := url.Parse(urlStr); err != nil {
+				return fmt.Errorf("destination %s: invalid URL format at index %d: %w", d.Name, i, err)
+			}
+		}
+
+		// Validate strategy if multiple URLs are configured
+		validStrategies := map[string]bool{
+			"round-robin": true,
+			"failover":    true,
+			"broadcast":   true,
+			"random":      true,
+			"":            true, // Empty is valid (defaults to round-robin)
+		}
+
+		if !validStrategies[d.Strategy] {
+			return fmt.Errorf("destination %s: invalid strategy '%s' (valid: round-robin, failover, broadcast, random)", d.Name, d.Strategy)
+		}
+	} else if d.URL != "" {
+		// Validate single URL format (backward compatibility)
+		if _, err := url.Parse(d.URL); err != nil {
+			return fmt.Errorf("invalid URL format: %w", err)
+		}
 	}
 
 	// Validate HTTP method

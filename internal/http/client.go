@@ -26,10 +26,17 @@ type Client struct {
 	fieldMapper      *processor.FieldMapper
 	processorManager *processor.ProcessorManager
 	logger           *zap.Logger
+	routers          map[string]*DestinationRouter // destination_name -> router
 }
 
 // NewClient creates a new HTTP client with the given destinations and processors
 func NewClient(destinations []config.HTTPDestination, fieldMapper *processor.FieldMapper, processorManager *processor.ProcessorManager, logger *zap.Logger) *Client {
+	// Create routers for all destinations
+	routers := make(map[string]*DestinationRouter)
+	for _, dest := range destinations {
+		routers[dest.Name] = NewDestinationRouter(dest)
+	}
+
 	return &Client{
 		destinations:     destinations,
 		fieldMapper:      fieldMapper,
@@ -37,7 +44,8 @@ func NewClient(destinations []config.HTTPDestination, fieldMapper *processor.Fie
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second, // Default timeout, can be overridden per destination
 		},
-		logger: logger.Named("http"),
+		logger:  logger.Named("http"),
+		routers: routers,
 	}
 }
 
@@ -475,18 +483,133 @@ func (c *Client) getTemplateFunctions() template.FuncMap {
 
 // forwardToDestination forwards payload to a specific destination with retry logic
 func (c *Client) forwardToDestination(ctx context.Context, dest config.HTTPDestination, payload []byte) error {
+	router := c.routers[dest.Name]
+	strategy := dest.GetStrategy()
+
 	c.logger.Debug("Forwarding event to destination",
 		zap.String("destination", dest.Name),
-		zap.String("url", dest.URL),
+		zap.String("strategy", strategy),
 		zap.String("method", dest.Method),
 	)
 
+	switch strategy {
+	case "broadcast":
+		return c.forwardBroadcast(ctx, dest, router, payload)
+	case "failover":
+		return c.forwardFailover(ctx, dest, router, payload)
+	default: // round-robin, random
+		return c.forwardSingle(ctx, dest, router, payload)
+	}
+}
+
+// forwardSingle forwards to a single URL selected by the router (round-robin or random)
+func (c *Client) forwardSingle(ctx context.Context, dest config.HTTPDestination, router *DestinationRouter, payload []byte) error {
+	url := router.SelectURL()
+	c.logger.Debug("Selected URL for single forward",
+		zap.String("destination", dest.Name),
+		zap.String("url", url),
+		zap.String("strategy", dest.GetStrategy()),
+	)
+	return c.makeRequestWithRetry(ctx, dest, url, payload)
+}
+
+// forwardBroadcast forwards to all URLs in parallel
+func (c *Client) forwardBroadcast(ctx context.Context, dest config.HTTPDestination, router *DestinationRouter, payload []byte) error {
+	urls := router.GetAllURLs()
+
+	c.logger.Info("Broadcasting to all URLs",
+		zap.String("destination", dest.Name),
+		zap.Int("url_count", len(urls)),
+	)
+
+	errChan := make(chan error, len(urls))
+
+	for _, url := range urls {
+		go func(u string) {
+			err := c.makeRequestWithRetry(ctx, dest, u, payload)
+			errChan <- err
+		}(url)
+	}
+
+	// Collect results
+	var errors []error
+	for i := 0; i < len(urls); i++ {
+		if err := <-errChan; err != nil {
+			errors = append(errors, err)
+		}
+	}
+
+	// Broadcast succeeds if at least one URL succeeds
+	if len(errors) == len(urls) {
+		c.logger.Error("All broadcast URLs failed",
+			zap.String("destination", dest.Name),
+			zap.Int("failed_count", len(errors)),
+		)
+		return fmt.Errorf("all broadcast URLs failed: %v", errors)
+	}
+
+	c.logger.Info("Broadcast completed",
+		zap.String("destination", dest.Name),
+		zap.Int("success_count", len(urls)-len(errors)),
+		zap.Int("failed_count", len(errors)),
+	)
+
+	return nil
+}
+
+// forwardFailover tries URLs in order until one succeeds
+func (c *Client) forwardFailover(ctx context.Context, dest config.HTTPDestination, router *DestinationRouter, payload []byte) error {
+	urls := router.GetURLsForFailover()
+
+	c.logger.Debug("Starting failover attempt",
+		zap.String("destination", dest.Name),
+		zap.Int("url_count", len(urls)),
+	)
+
 	var lastErr error
+	for i, url := range urls {
+		c.logger.Debug("Trying failover URL",
+			zap.String("destination", dest.Name),
+			zap.String("url", url),
+			zap.Int("attempt", i+1),
+			zap.Int("total_urls", len(urls)),
+		)
+
+		err := c.makeRequestWithRetry(ctx, dest, url, payload)
+		if err == nil {
+			c.logger.Info("Failover successful",
+				zap.String("destination", dest.Name),
+				zap.String("url", url),
+				zap.Int("attempt", i+1),
+			)
+			return nil // Success
+		}
+
+		lastErr = err
+		c.logger.Warn("Failover attempt failed, trying next URL",
+			zap.String("destination", dest.Name),
+			zap.String("url", url),
+			zap.Int("attempt", i+1),
+			zap.Error(err),
+		)
+	}
+
+	c.logger.Error("All failover URLs failed",
+		zap.String("destination", dest.Name),
+		zap.Int("url_count", len(urls)),
+	)
+
+	return fmt.Errorf("all failover URLs failed, last error: %w", lastErr)
+}
+
+// makeRequestWithRetry makes HTTP request with retry logic for a specific URL
+func (c *Client) makeRequestWithRetry(ctx context.Context, dest config.HTTPDestination, url string, payload []byte) error {
 	maxAttempts := dest.Retry.MaxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1 // At least one attempt
 	}
 
+	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Create request context with timeout
 		reqCtx := ctx
@@ -497,11 +620,11 @@ func (c *Client) forwardToDestination(ctx context.Context, dest config.HTTPDesti
 		}
 
 		// Make the HTTP request
-		err := c.makeRequest(reqCtx, dest, payload)
+		err := c.makeRequestToURL(reqCtx, dest, url, payload)
 		if err == nil {
 			c.logger.Info("Successfully forwarded event",
 				zap.String("destination", dest.Name),
-				zap.String("url", dest.URL),
+				zap.String("url", url),
 				zap.Int("attempt", attempt),
 			)
 			return nil
@@ -510,7 +633,7 @@ func (c *Client) forwardToDestination(ctx context.Context, dest config.HTTPDesti
 		lastErr = err
 		c.logger.Warn("Failed to forward event",
 			zap.String("destination", dest.Name),
-			zap.String("url", dest.URL),
+			zap.String("url", url),
 			zap.Int("attempt", attempt),
 			zap.Int("max_attempts", maxAttempts),
 			zap.Error(err),
@@ -525,6 +648,7 @@ func (c *Client) forwardToDestination(ctx context.Context, dest config.HTTPDesti
 		delay := c.calculateBackoffDelay(attempt, dest.Retry)
 		c.logger.Debug("Retrying after delay",
 			zap.String("destination", dest.Name),
+			zap.String("url", url),
 			zap.Duration("delay", delay),
 			zap.Int("next_attempt", attempt+1),
 		)
@@ -539,6 +663,73 @@ func (c *Client) forwardToDestination(ctx context.Context, dest config.HTTPDesti
 	}
 
 	return fmt.Errorf("failed after %d attempts, last error: %w", maxAttempts, lastErr)
+}
+
+// makeRequestToURL makes a single HTTP request to a specific URL
+func (c *Client) makeRequestToURL(ctx context.Context, dest config.HTTPDestination, url string, payload []byte) error {
+	// Log the complete HTTP request body for debugging
+	c.logger.Debug("HTTP request body",
+		zap.String("destination", dest.Name),
+		zap.String("url", url),
+		zap.String("method", dest.Method),
+		zap.String("request_body", string(payload)),
+		zap.Int("content_length", len(payload)),
+	)
+
+	// Create request
+	req, err := http.NewRequestWithContext(ctx, dest.Method, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set destination headers first
+	for key, value := range dest.Headers {
+		req.Header.Set(key, value)
+	}
+
+	// Add payload template headers if they exist
+	if dest.PayloadTemplate != nil && len(dest.PayloadTemplate.Headers) > 0 {
+		for key, value := range dest.PayloadTemplate.Headers {
+			req.Header.Set(key, value)
+		}
+		c.logger.Debug("Applied template headers",
+			zap.String("destination", dest.Name),
+			zap.Any("template_headers", dest.PayloadTemplate.Headers),
+		)
+	}
+
+	// Set content length
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+
+	// Log request headers for debugging
+	c.logger.Debug("HTTP request headers",
+		zap.String("destination", dest.Name),
+		zap.Any("headers", req.Header),
+	)
+
+	// Make request
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body for logging
+	body, _ := io.ReadAll(resp.Body)
+
+	// Check status code
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	c.logger.Debug("HTTP request successful",
+		zap.String("destination", dest.Name),
+		zap.String("url", url),
+		zap.Int("status_code", resp.StatusCode),
+		zap.String("response_body", string(body)),
+	)
+
+	return nil
 }
 
 // makeRequest makes a single HTTP request to a destination
