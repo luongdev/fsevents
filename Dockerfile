@@ -49,4 +49,4 @@ RUN mkdir -p logs && chown -R fsevents:fsevents /app
 USER fsevents
 
 # Default command
-CMD ["./fsevents", "--config", "configs/config.yaml"] 
+CMD ["./fsevents", "--config", "configs/config.yml"] 

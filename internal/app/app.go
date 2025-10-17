@@ -16,6 +16,7 @@ import (
 	"fsevents/internal/http"
 	"fsevents/internal/logger"
 	"fsevents/internal/processor"
+	"fsevents/internal/worker"
 	"fsevents/pkg/types"
 )
 
@@ -32,6 +33,7 @@ type App struct {
 	fieldMapper      *processor.FieldMapper
 	processorManager *processor.ProcessorManager
 	httpClient       *http.Client
+	workerPool       *worker.Pool
 }
 
 // New creates a new application instance
@@ -82,7 +84,7 @@ func (a *App) Stop() error {
 	// Cancel context to signal all components to stop
 	a.cancel()
 
-	// Stop ESL client first
+	// Stop ESL client first (stops accepting new events)
 	if a.eslClient != nil {
 		if err := a.eslClient.Close(); err != nil {
 			a.logger.Error("Error closing ESL client", zap.Error(err))
@@ -93,7 +95,25 @@ func (a *App) Stop() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	// Wait for all goroutines to finish with timeout
+	// Stop worker pool (waits for workers to finish)
+	if a.workerPool != nil {
+		done := make(chan struct{})
+		go func() {
+			if err := a.workerPool.Stop(); err != nil {
+				a.logger.Error("Error stopping worker pool", zap.Error(err))
+			}
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			a.logger.Info("Worker pool stopped gracefully")
+		case <-shutdownCtx.Done():
+			a.logger.Warn("Worker pool shutdown timeout, forcing exit")
+		}
+	}
+
+	// Wait for all other goroutines to finish with timeout
 	done := make(chan struct{})
 	go func() {
 		a.wg.Wait()
@@ -145,6 +165,27 @@ func (a *App) startComponents() error {
 	a.logger.Info("HTTP client initialized",
 		zap.Int("destination_count", a.httpClient.GetDestinationCount()))
 
+	// Initialize worker pool
+	eventProcessor := &EventProcessorImpl{
+		eventFilter:      a.eventFilter,
+		fieldMapper:      a.fieldMapper,
+		processorManager: a.processorManager,
+		httpClient:       a.httpClient,
+		logger:           a.logger,
+		ctx:              a.ctx,
+	}
+
+	workerCfg := worker.Config{
+		WorkerCount: a.config.Processing.WorkerCount,
+		QueueSize:   a.config.Processing.EventBufferSize,
+	}
+	a.workerPool = worker.NewPool(workerCfg, eventProcessor, a.logger)
+
+	// Start worker pool
+	if err := a.workerPool.Start(); err != nil {
+		return fmt.Errorf("failed to start worker pool: %w", err)
+	}
+
 	// Start ESL client
 	if err := a.startESLClient(); err != nil {
 		return fmt.Errorf("failed to start ESL client: %w", err)
@@ -169,10 +210,11 @@ func (a *App) startESLClient() error {
 	a.logger.Info("Starting ESL client",
 		zap.String("host", a.config.ESL.Host),
 		zap.Int("port", a.config.ESL.Port),
+		zap.Int("buffer_size", a.config.Processing.EventBufferSize),
 	)
 
-	// Create ESL client
-	a.eslClient = esl.NewClient(&a.config.ESL, a.logger)
+	// Create ESL client with configured buffer size
+	a.eslClient = esl.NewClientWithBuffer(&a.config.ESL, a.config.Processing.EventBufferSize, a.logger)
 
 	// Connect to FreeSWITCH with configured events
 	events := a.config.Events.SubscribeEvents
@@ -204,39 +246,50 @@ func (a *App) startEventProcessor() {
 					a.logger.Debug("Event channel closed, shutting down processor")
 					return
 				}
-				a.processEvent(event)
+				// Submit to worker pool instead of processing directly
+				if err := a.workerPool.Submit(event); err != nil {
+					a.logger.Warn("Failed to submit event to worker pool",
+						zap.String("event_name", event.Name),
+						zap.Error(err))
+				}
 			}
 		}
 	}()
 }
 
-// processEvent processes a single event
-func (a *App) processEvent(event *types.Event) {
+// EventProcessorImpl implements worker.EventProcessor interface
+type EventProcessorImpl struct {
+	eventFilter      *processor.EventFilter
+	fieldMapper      *processor.FieldMapper
+	processorManager *processor.ProcessorManager
+	httpClient       *http.Client
+	logger           *zap.Logger
+	ctx              context.Context
+}
+
+// ProcessEvent processes a single event (implements worker.EventProcessor)
+func (p *EventProcessorImpl) ProcessEvent(ctx context.Context, event *types.Event) error {
 	// Apply event filters first
-	if !a.eventFilter.ShouldProcess(event) {
+	if !p.eventFilter.ShouldProcess(event) {
 		// Event was filtered out - log at debug level
-		a.logger.Debug("Event filtered out",
+		p.logger.Debug("Event filtered out",
 			zap.String("event_name", event.Name),
 			zap.String("unique_id", event.GetHeader("Unique-ID")),
 		)
-		return
+		return nil
 	}
 
 	// Forward to HTTP endpoints
-	if err := a.forwardEventToHTTP(event); err != nil {
-		a.logger.Error("Failed to forward event to HTTP destinations",
-			zap.String("event_name", event.Name),
-			zap.String("unique_id", event.GetHeader("Unique-ID")),
-			zap.Error(err),
-		)
-	}
-}
-
-// forwardEventToHTTP forwards an event to all configured HTTP destinations
-func (a *App) forwardEventToHTTP(event *types.Event) error {
-	// Create a context with timeout for the HTTP request
-	ctx, cancel := context.WithTimeout(a.ctx, 60*time.Second)
+	httpCtx, cancel := context.WithTimeout(p.ctx, 60*time.Second)
 	defer cancel()
 
-	return a.httpClient.ForwardEvent(ctx, event)
+	if err := p.httpClient.ForwardEvent(httpCtx, event); err != nil {
+		p.logger.Error("Failed to forward event to HTTP destinations",
+			zap.String("event_name", event.Name),
+			zap.String("unique_id", event.GetHeader("Unique-ID")),
+			zap.Error(err))
+		// Don't return error - we want to continue processing other events
+	}
+
+	return nil
 }

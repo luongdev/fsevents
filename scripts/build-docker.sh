@@ -5,7 +5,7 @@
 set -e
 
 # Variables
-IMAGE_NAME="fsevents"
+IMAGE_NAME="luongdev/fsevents"
 VERSION=${1:-"latest"}
 REGISTRY=${DOCKER_REGISTRY:-""}
 BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')

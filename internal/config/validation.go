@@ -21,6 +21,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("events configuration error: %w", err)
 	}
 
+	if err := c.Processing.Validate(); err != nil {
+		return fmt.Errorf("processing configuration error: %w", err)
+	}
+
 	if err := c.HTTP.Validate(); err != nil {
 		return fmt.Errorf("http configuration error: %w", err)
 	}
@@ -89,84 +93,87 @@ func (e *EventsConfig) Validate() error {
 
 	// Validate event names
 	validEvents := map[string]bool{
-		"CHANNEL_CREATE":          true,
-		"CHANNEL_DESTROY":         true,
-		"CHANNEL_ANSWER":          true,
-		"CHANNEL_HANGUP":          true,
-		"CHANNEL_BRIDGE":          true,
-		"CHANNEL_UNBRIDGE":        true,
-		"CHANNEL_PROGRESS":        true,
-		"CHANNEL_OUTGOING":        true,
-		"CHANNEL_PARK":            true,
-		"CHANNEL_UNPARK":          true,
-		"API":                     true,
-		"LOG":                     true,
-		"INBOUND_CHAN":            true,
-		"OUTBOUND_CHAN":           true,
-		"STARTUP":                 true,
-		"SHUTDOWN":                true,
-		"PUBLISH":                 true,
-		"UNPUBLISH":               true,
-		"TALK":                    true,
-		"NOTALK":                  true,
-		"SESSION_CRASH":           true,
-		"MODULE_LOAD":             true,
-		"MODULE_UNLOAD":           true,
-		"DTMF":                    true,
-		"MESSAGE":                 true,
-		"PRESENCE_IN":             true,
-		"NOTIFY_IN":               true,
-		"PRESENCE_OUT":            true,
-		"PRESENCE_PROBE":          true,
-		"MESSAGE_WAITING":         true,
-		"MESSAGE_QUERY":           true,
-		"ROSTER":                  true,
-		"CODEC":                   true,
-		"BACKGROUND_JOB":          true,
-		"DETECTED_SPEECH":         true,
-		"DETECTED_TONE":           true,
-		"PRIVATE_COMMAND":         true,
-		"HEARTBEAT":               true,
-		"TRAP":                    true,
-		"ADD_SCHEDULE":            true,
-		"DEL_SCHEDULE":            true,
-		"EXE_SCHEDULE":            true,
-		"RE_SCHEDULE":             true,
-		"RELOADXML":               true,
-		"NOTIFY":                  true,
-		"PHONE_FEATURE":           true,
-		"PHONE_FEATURE_SUBSCRIBE": true,
-		"SEND_MESSAGE":            true,
-		"RECV_MESSAGE":            true,
-		"REQUEST_PARAMS":          true,
-		"CHANNEL_DATA":            true,
-		"GENERAL":                 true,
-		"COMMAND":                 true,
-		"SESSION_HEARTBEAT":       true,
-		"CLIENT_DISCONNECTED":     true,
-		"SERVER_DISCONNECTED":     true,
-		"SEND_INFO":               true,
-		"RECV_INFO":               true,
-		"RECV_RTCP_MESSAGE":       true,
-		"CALL_SECURE":             true,
-		"NAT":                     true,
-		"RECORD_START":            true,
-		"RECORD_STOP":             true,
-		"PLAYBACK_START":          true,
-		"PLAYBACK_STOP":           true,
-		"CALL_UPDATE":             true,
-		"FAILURE":                 true,
-		"SOCKET_DATA":             true,
-		"MEDIA_BUG_START":         true,
-		"MEDIA_BUG_STOP":          true,
-		"CONFERENCE_DATA_QUERY":   true,
-		"CONFERENCE_DATA":         true,
-		"CALL_SETUP_REQ":          true,
-		"CALL_SETUP_RESULT":       true,
-		"CALL_DETAIL":             true,
-		"DEVICE_STATE":            true,
-		"CUSTOM":                  true, // Base CUSTOM event
-		"ALL":                     true,
+		"CHANNEL_CREATE":           true,
+		"CHANNEL_DESTROY":          true,
+		"CHANNEL_ANSWER":           true,
+		"CHANNEL_HANGUP":           true,
+		"CHANNEL_BRIDGE":           true,
+		"CHANNEL_UNBRIDGE":         true,
+		"CHANNEL_PROGRESS":         true,
+		"CHANNEL_OUTGOING":         true,
+		"CHANNEL_PARK":             true,
+		"CHANNEL_UNPARK":           true,
+		"CHANNEL_ORIGINATE":        true,
+		"CHANNEL_EXECUTE":          true,
+		"CHANNEL_EXECUTE_COMPLETE": true,
+		"API":                      true,
+		"LOG":                      true,
+		"INBOUND_CHAN":             true,
+		"OUTBOUND_CHAN":            true,
+		"STARTUP":                  true,
+		"SHUTDOWN":                 true,
+		"PUBLISH":                  true,
+		"UNPUBLISH":                true,
+		"TALK":                     true,
+		"NOTALK":                   true,
+		"SESSION_CRASH":            true,
+		"MODULE_LOAD":              true,
+		"MODULE_UNLOAD":            true,
+		"DTMF":                     true,
+		"MESSAGE":                  true,
+		"PRESENCE_IN":              true,
+		"NOTIFY_IN":                true,
+		"PRESENCE_OUT":             true,
+		"PRESENCE_PROBE":           true,
+		"MESSAGE_WAITING":          true,
+		"MESSAGE_QUERY":            true,
+		"ROSTER":                   true,
+		"CODEC":                    true,
+		"BACKGROUND_JOB":           true,
+		"DETECTED_SPEECH":          true,
+		"DETECTED_TONE":            true,
+		"PRIVATE_COMMAND":          true,
+		"HEARTBEAT":                true,
+		"TRAP":                     true,
+		"ADD_SCHEDULE":             true,
+		"DEL_SCHEDULE":             true,
+		"EXE_SCHEDULE":             true,
+		"RE_SCHEDULE":              true,
+		"RELOADXML":                true,
+		"NOTIFY":                   true,
+		"PHONE_FEATURE":            true,
+		"PHONE_FEATURE_SUBSCRIBE":  true,
+		"SEND_MESSAGE":             true,
+		"RECV_MESSAGE":             true,
+		"REQUEST_PARAMS":           true,
+		"CHANNEL_DATA":             true,
+		"GENERAL":                  true,
+		"COMMAND":                  true,
+		"SESSION_HEARTBEAT":        true,
+		"CLIENT_DISCONNECTED":      true,
+		"SERVER_DISCONNECTED":      true,
+		"SEND_INFO":                true,
+		"RECV_INFO":                true,
+		"RECV_RTCP_MESSAGE":        true,
+		"CALL_SECURE":              true,
+		"NAT":                      true,
+		"RECORD_START":             true,
+		"RECORD_STOP":              true,
+		"PLAYBACK_START":           true,
+		"PLAYBACK_STOP":            true,
+		"CALL_UPDATE":              true,
+		"FAILURE":                  true,
+		"SOCKET_DATA":              true,
+		"MEDIA_BUG_START":          true,
+		"MEDIA_BUG_STOP":           true,
+		"CONFERENCE_DATA_QUERY":    true,
+		"CONFERENCE_DATA":          true,
+		"CALL_SETUP_REQ":           true,
+		"CALL_SETUP_RESULT":        true,
+		"CALL_DETAIL":              true,
+		"DEVICE_STATE":             true,
+		"CUSTOM":                   true, // Base CUSTOM event
+		"ALL":                      true,
 	}
 
 	for _, event := range e.SubscribeEvents {
@@ -448,6 +455,28 @@ func (l *LoggingConfig) Validate() error {
 
 	if l.Output == "" {
 		return fmt.Errorf("output cannot be empty")
+	}
+
+	return nil
+}
+
+// Validate validates ProcessingConfig configuration
+func (p *ProcessingConfig) Validate() error {
+	if p.WorkerCount < 0 {
+		return fmt.Errorf("worker_count cannot be negative, got %d", p.WorkerCount)
+	}
+
+	if p.EventBufferSize <= 0 {
+		return fmt.Errorf("event_buffer_size must be positive, got %d", p.EventBufferSize)
+	}
+
+	// Reasonable limits
+	if p.EventBufferSize > 1000000 {
+		return fmt.Errorf("event_buffer_size too large (max 1000000), got %d", p.EventBufferSize)
+	}
+
+	if p.WorkerCount > 1000 {
+		return fmt.Errorf("worker_count too large (max 1000), got %d", p.WorkerCount)
 	}
 
 	return nil

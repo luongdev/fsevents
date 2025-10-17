@@ -11,11 +11,12 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	ESL     ESLConfig     `mapstructure:"esl"`
-	Events  EventsConfig  `mapstructure:"events"`
-	HTTP    HTTPConfig    `mapstructure:"http"`
-	Logging LoggingConfig `mapstructure:"logging"`
-	Metrics MetricsConfig `mapstructure:"metrics"`
+	ESL        ESLConfig        `mapstructure:"esl"`
+	Events     EventsConfig     `mapstructure:"events"`
+	Processing ProcessingConfig `mapstructure:"processing"`
+	HTTP       HTTPConfig       `mapstructure:"http"`
+	Logging    LoggingConfig    `mapstructure:"logging"`
+	Metrics    MetricsConfig    `mapstructure:"metrics"`
 }
 
 // ESLConfig represents FreeSWITCH ESL connection configuration
@@ -128,6 +129,12 @@ type LoggingConfig struct {
 	Level  string `mapstructure:"level"`
 	Format string `mapstructure:"format"`
 	Output string `mapstructure:"output"`
+}
+
+// ProcessingConfig represents event processing configuration
+type ProcessingConfig struct {
+	WorkerCount     int `mapstructure:"worker_count" yaml:"worker_count"`           // Number of worker goroutines (0 = CPU count)
+	EventBufferSize int `mapstructure:"event_buffer_size" yaml:"event_buffer_size"` // ESL event channel buffer size
 }
 
 // MetricsConfig represents metrics configuration
@@ -297,6 +304,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("events.subscribe_events", []string{"HEARTBEAT"})
 	v.SetDefault("events.filter_logic", "AND")
 
+	// Processing defaults
+	v.SetDefault("processing.worker_count", 1) // 0 = runtime.NumCPU()
+	v.SetDefault("processing.event_buffer_size", 1000)
+
 	// HTTP defaults
 	v.SetDefault("http.destinations", []map[string]interface{}{})
 
@@ -335,6 +346,10 @@ func configToMap(c *Config) map[string]interface{} {
 			"field_mappings":   c.Events.FieldMappings,
 			"processors":       c.Events.Processors,
 			"payload_template": c.Events.PayloadTemplate,
+		},
+		"processing": map[string]interface{}{
+			"worker_count":      c.Processing.WorkerCount,
+			"event_buffer_size": c.Processing.EventBufferSize,
 		},
 		"http": map[string]interface{}{
 			"destinations": c.HTTP.Destinations,

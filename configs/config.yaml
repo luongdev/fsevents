@@ -1,6 +1,3 @@
-# FreeSWITCH ESL Sidecar App Configuration
-
-# FreeSWITCH ESL Connection
 esl:
   host: "192.168.13.137"
   port: 8021
@@ -8,74 +5,82 @@ esl:
   timeout: 10s
   reconnect_interval: 5s
   max_reconnect_attempts: 10
-  keepalive:
-    enabled: true
-    interval: 15s
-    timeout: 3s
-    failure_threshold: 2
 
 # Event filtering and processing
 events:
   subscribe_events:
+    - "CHANNEL_CREATE"
     - "CUSTOM callcenter::info"
 
-  field_mappings:
-    - from: "Event-Date-Timestamp"
-      to: "timestamp"
-      transforms: [":int", ":divide:1000", ":round"]
-
   event_field_mappings:
+    # Agent status events for ASM - with field mapping
     - event_types: ["CUSTOM callcenter::*"]
       mappings:
+        - from: "Event-Date-Timestamp"
+          to: "changeTime"
+          transforms: [":int", ":divide:1000000", ":round"]
         - from: "Cc-Action"
           to: "action"
           transforms: ["trim"]
-        
         - from: "Cc-Agent"
-          to: "agent_id"
+          to: "agentId"
           transforms: ["trim"]
-        
         - from: "Cc-Queue"
-          to: "queue_name"
+          to: "queueName"
           transforms: ["trim"]
-        
         - from: "Cc-Agent-State"
-          to: "agent_state"
+          to: "state"
           transforms: ["url_decode"]
-        
         - from: "Cc-Agent-Status"
-          to: "agent_status"
+          to: "status"
           transforms: ["url_decode"]
       field_filters:
+        include_headers:
+          - "Event-*"
+          - "Unique-ID"
+          - "Cc-*"
+        exclude_headers:
+          - "*-Ipv6"
+          - "*-Switchname"
         include_fields:
-          - "timestamp" 
-          - "action"         # Mapped fields only
-          - "agent_id"
-          - "queue_name"
-          - "agent_state"
-          - "agent_status"
+          - "changeTime"
+          - "action"
+          - "agentId"
+          - "state"
+          - "status"
         exclude_fields:
-          - "headers"
-          - "event_subclass"
-          - "event_name"
+        #- "headers"
+        #- "event_subclass"
+        #- "event_name"
         include_body: false
-  field_filters:
-    include_headers:
-      - "Event-*"
-      - "Unique-ID"
-      - "Cc-*"
-    exclude_headers:
-      - "*-Ipv6"         # IPv6 addresses
-      - "*-Switchname"   # Switch internal names
-      - "*-Calling-*"    # Internal calling details
-    # Không include body để tiết kiệm bandwidth
-    include_body: false    
 
-# HTTP destinations với selective routing
+    # # Channel events for Call State Manager - NO field mapping, keep raw format
+    # - event_types: ["CHANNEL_*"]
+    #   mappings: []
+    #   field_filters:
+    #     include_headers:
+    #       - "Event-*"
+    #       - "Unique-ID"
+    #       - "Channel-*"
+    #       - "Caller-*"
+    #       - "Call-Direction"
+    #       - "variable_*"
+    #       - "Application*"
+    #       - "Hangup-Cause"
+    #       - "Bridge-*"
+    #       - "Other-Leg-*"
+    #       - "Originator-*"
+    #     exclude_headers:
+    #       - "*-Ipv6"
+    #       - "*-Switchname"
+    #       - "*-Calling-*"
+    #     include_body: false
+
+# HTTP destinations
 http:
   destinations:
     - name: "asm"
-      url: "https://httpbin.org/post"
+      url: "http://192.168.13.134:31804/api/v2/status/notify-status-change"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -87,12 +92,25 @@ http:
         max_delay: 5s
       event_filters:
         - "CUSTOM callcenter::*"
-
       filter_logic: "AND"
       filters:
         - field: "Cc-Action"
           operator: "regex"
           value: "^(agent-)(status|state)(-change)$"
+
+    - name: "call-state-manager"
+      url: "http://10.196.26.169:30000/events"
+      method: "POST"
+      headers:
+        Content-Type: "application/json"
+      timeout: 5s
+      retry:
+        max_attempts: 3
+        backoff: "exponential"
+        initial_delay: 1s
+        max_delay: 10s
+      event_filters:
+        - "CHANNEL_*"
 
 # Logging
 logging:

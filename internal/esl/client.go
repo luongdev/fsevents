@@ -44,14 +44,19 @@ type ConnectionStats struct {
 	mu                sync.RWMutex
 }
 
-// NewClient creates a new ESL client
+// NewClient creates a new ESL client with default buffer size
 func NewClient(config *config.ESLConfig, logger *zap.Logger) *Client {
+	return NewClientWithBuffer(config, 1000, logger)
+}
+
+// NewClientWithBuffer creates a new ESL client with configurable buffer size
+func NewClientWithBuffer(config *config.ESLConfig, bufferSize int, logger *zap.Logger) *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Client{
 		config: config,
 		logger: logger.Named("esl"),
-		events: make(chan *types.Event, 1000), // Buffer for events
+		events: make(chan *types.Event, bufferSize), // Configurable buffer for events
 		stats: &ConnectionStats{
 			ConnectedAt: time.Now(),
 		},
@@ -144,7 +149,7 @@ func (c *Client) subscribeToEvents(configuredEvents []string) error {
 		Listen: eventNames,
 	}
 
-	c.logger.Info("Sending event command...")
+	c.logger.Info(fmt.Sprintf("Sending event command... %v", eventCmd.BuildMessage()))
 	response, err := c.conn.SendCommand(ctx, eventCmd)
 	if err != nil {
 		c.logger.Error("Event command failed", zap.Error(err))
@@ -175,7 +180,6 @@ func (c *Client) handleEvent(event *eslgo.Event) {
 			s.EventsReceived++
 		})
 
-		// Send to event channel (non-blocking)
 		select {
 		case c.events <- fsEvent:
 			c.updateStats(func(s *ConnectionStats) {
