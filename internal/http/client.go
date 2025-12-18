@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -631,7 +632,19 @@ func (c *Client) makeRequestWithRetry(ctx context.Context, dest config.HTTPDesti
 		}
 
 		lastErr = err
-		c.logger.Warn("Failed to forward event",
+
+		// Check if error is retryable
+		if !c.isRetryableError(err) {
+			c.logger.Error("Non-retryable error, stopping retry attempts",
+				zap.String("destination", dest.Name),
+				zap.String("url", url),
+				zap.Int("attempt", attempt),
+				zap.Error(err),
+			)
+			return fmt.Errorf("non-retryable error on attempt %d: %w", attempt, err)
+		}
+
+		c.logger.Warn("Failed to forward event (retryable error)",
 			zap.String("destination", dest.Name),
 			zap.String("url", url),
 			zap.Int("attempt", attempt),
@@ -825,6 +838,67 @@ func (c *Client) calculateBackoffDelay(attempt int, retry config.RetryConfig) ti
 		// Default to fixed delay
 		return retry.InitialDelay
 	}
+}
+
+// isRetryableError determines if an HTTP error should be retried
+func (c *Client) isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+
+	// Check if it's an HTTP status code error
+	if strings.HasPrefix(errStr, "HTTP ") {
+		// Extract status code from error message "HTTP 400: ..."
+		parts := strings.SplitN(errStr, " ", 3)
+		if len(parts) >= 2 {
+			// Remove colon from status code if present
+			statusStr := strings.TrimSuffix(parts[1], ":")
+			if statusCode, parseErr := strconv.Atoi(statusStr); parseErr == nil {
+				// Don't retry client errors (4xx)
+				if statusCode >= 400 && statusCode < 500 {
+					c.logger.Debug("Non-retryable client error",
+						zap.Int("status_code", statusCode),
+						zap.String("error", errStr))
+					return false
+				}
+				// Retry server errors (5xx)
+				if statusCode >= 500 {
+					c.logger.Debug("Retryable server error",
+						zap.Int("status_code", statusCode),
+						zap.String("error", errStr))
+					return true
+				}
+			}
+		}
+	}
+
+	// Retry network-related errors
+	networkErrors := []string{
+		"connection refused",
+		"connection timeout",
+		"timeout",
+		"no such host",
+		"network is unreachable",
+		"connection reset",
+		"broken pipe",
+		"context deadline exceeded",
+	}
+
+	errLower := strings.ToLower(errStr)
+	for _, networkErr := range networkErrors {
+		if strings.Contains(errLower, networkErr) {
+			c.logger.Debug("Retryable network error",
+				zap.String("error", errStr))
+			return true
+		}
+	}
+
+	// Default: retry unknown errors (conservative approach)
+	c.logger.Debug("Unknown error, will retry",
+		zap.String("error", errStr))
+	return true
 }
 
 // GetDestinationCount returns the number of configured destinations

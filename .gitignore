@@ -1,2 +1,4 @@
 *.log
 fsevents
+.DS_Store
+*._*

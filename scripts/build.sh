@@ -6,7 +6,7 @@ set -e
 
 # Variables
 APP_NAME="fsevents"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.1.1}"
 BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S_UTC')
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 

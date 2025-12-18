@@ -26,7 +26,7 @@ echo
 
 # Build the image
 echo -e "${YELLOW}Building Docker image...${NC}"
-docker build \
+docker buildx build --platform=linux/amd64 --push \
     --build-arg BUILD_DATE="${BUILD_DATE}" \
     --build-arg GIT_COMMIT="${GIT_COMMIT}" \
     --build-arg VERSION="${VERSION}" \
