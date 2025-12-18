@@ -15,6 +15,7 @@ import (
 	"fsevents/internal/esl"
 	"fsevents/internal/http"
 	"fsevents/internal/logger"
+	"fsevents/internal/metrics"
 	"fsevents/internal/processor"
 	"fsevents/internal/worker"
 	"fsevents/pkg/types"
@@ -34,6 +35,7 @@ type App struct {
 	processorManager *processor.ProcessorManager
 	httpClient       *http.Client
 	workerPool       *worker.Pool
+	metricsServer    *metrics.Server
 }
 
 // New creates a new application instance
@@ -105,6 +107,13 @@ func (a *App) Stop() error {
 			a.logger.Info("Worker pool stopped gracefully")
 		case <-shutdownCtx.Done():
 			a.logger.Warn("Worker pool shutdown timeout, forcing exit")
+		}
+	}
+
+	// Stop metrics server
+	if a.metricsServer != nil {
+		if err := a.metricsServer.Stop(); err != nil {
+			a.logger.Error("Error stopping metrics server", zap.Error(err))
 		}
 	}
 
@@ -191,9 +200,9 @@ func (a *App) startComponents() error {
 	a.startEventProcessor()
 	a.logger.Info("Event processor started")
 
-	// TODO: Start metrics server
-	if a.config.Metrics.Enabled {
-		a.logger.Debug("Metrics server component not implemented yet")
+	// Start metrics server
+	if err := a.startMetricsServer(); err != nil {
+		return fmt.Errorf("failed to start metrics server: %w", err)
 	}
 
 	a.logger.Info("All components started successfully")
@@ -250,6 +259,22 @@ func (a *App) startEventProcessor() {
 			}
 		}
 	}()
+}
+
+// startMetricsServer starts the metrics HTTP server
+func (a *App) startMetricsServer() error {
+	a.logger.Info("Starting metrics server")
+
+	// Initialize metrics server
+	a.metricsServer = metrics.NewServer(&a.config.Metrics, a.eslClient, a.workerPool, a.logger)
+
+	// Start the server
+	if err := a.metricsServer.Start(); err != nil {
+		return fmt.Errorf("failed to start metrics server: %w", err)
+	}
+
+	a.logger.Info("Metrics server started successfully")
+	return nil
 }
 
 // EventProcessorImpl implements worker.EventProcessor interface

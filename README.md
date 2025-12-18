@@ -85,7 +85,17 @@ With default configuration on modern hardware:
 
 ### Monitoring
 
-The application exposes metrics at `http://localhost:9090/metrics`:
+The application includes a built-in HTTP metrics server that exposes comprehensive metrics at `http://localhost:9090/metrics` and health checks at `http://localhost:9090/health`.
+
+**Configuration:**
+```yaml
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+```
+
+**Sample metrics response:**
 
 ```json
 {

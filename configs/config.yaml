@@ -115,3 +115,9 @@ logging:
   level: "debug"
   format: "console"
   output: "stdout"
+
+# Metrics
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"

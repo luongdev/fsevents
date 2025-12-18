@@ -30,8 +30,8 @@ docker buildx build --platform=linux/amd64 --push \
     --build-arg BUILD_DATE="${BUILD_DATE}" \
     --build-arg GIT_COMMIT="${GIT_COMMIT}" \
     --build-arg VERSION="${VERSION}" \
-    -t "${IMAGE_NAME}:${VERSION}" \
     -t "${IMAGE_NAME}:latest" \
+    -t "${IMAGE_NAME}:${VERSION}" \
     .
 
 echo -e "${GREEN}✅ Docker image built successfully!${NC}"
@@ -56,11 +56,3 @@ echo "  docker run -d --name fsevents-sidecar -p 9090:9090 -v \$(pwd)/configs:/a
 echo
 echo "Or use docker-compose:"
 echo "  docker-compose up -d"
-
-# Optional: Push to registry
-if [ -n "${REGISTRY}" ] && [ "${PUSH_IMAGE:-false}" = "true" ]; then
-    echo -e "${YELLOW}Pushing to registry...${NC}"
-    docker push "${REGISTRY}/${IMAGE_NAME}:${VERSION}"
-    docker push "${REGISTRY}/${IMAGE_NAME}:latest"
-    echo -e "${GREEN}✅ Images pushed to registry${NC}"
-fi 
